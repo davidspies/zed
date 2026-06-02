@@ -73,6 +73,8 @@ pub enum Commands {
         stdout_socket: PathBuf,
         #[arg(long)]
         stderr_socket: PathBuf,
+        #[arg(long)]
+        cli_socket: PathBuf,
     },
     Proxy {
         #[arg(long)]
@@ -94,12 +96,14 @@ pub fn run(command: Commands) -> anyhow::Result<()> {
             stdin_socket,
             stdout_socket,
             stderr_socket,
+            cli_socket,
         } => execute_run(
             log_file,
             pid_file,
             stdin_socket,
             stdout_socket,
             stderr_socket,
+            cli_socket,
         ),
         Commands::Proxy {
             identifier,
@@ -127,6 +131,55 @@ pub fn run(command: Commands) -> anyhow::Result<()> {
     }
 }
 
+pub fn run_cli(wait: bool, paths: Vec<String>) -> anyhow::Result<()> {
+    execute_cli(wait, paths).context("running remote cli")
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct RemoteCliRequest {
+    paths: Vec<String>,
+    wait: bool,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct RemoteCliResponse {
+    status: i32,
+    stderr: String,
+}
+
+async fn write_remote_cli_message(
+    stream: &mut UnixStream,
+    message: impl serde::Serialize,
+) -> Result<()> {
+    let bytes = serde_json::to_vec(&message).context("serializing remote cli message")?;
+    let len = u32::try_from(bytes.len()).context("remote cli message is too large")?;
+    stream
+        .write_all(&len.to_le_bytes())
+        .await
+        .context("writing remote cli message length")?;
+    stream
+        .write_all(&bytes)
+        .await
+        .context("writing remote cli message")?;
+    stream.flush().await.context("flushing remote cli message")
+}
+
+async fn read_remote_cli_message<T: serde::de::DeserializeOwned>(
+    stream: &mut UnixStream,
+) -> Result<T> {
+    let mut len = [0; size_of::<u32>()];
+    stream
+        .read_exact(&mut len)
+        .await
+        .context("reading remote cli message length")?;
+    let mut bytes = vec![0; u32::from_le_bytes(len) as usize];
+    stream
+        .read_exact(&mut bytes)
+        .await
+        .context("reading remote cli message")?;
+    serde_json::from_slice(&bytes).context("parsing remote cli message")
+}
+
 pub static VERSION: LazyLock<String> = LazyLock::new(|| match *RELEASE_CHANNEL {
     ReleaseChannel::Stable | ReleaseChannel::Preview => env!("ZED_PKG_VERSION").to_owned(),
     ReleaseChannel::Nightly | ReleaseChannel::Dev => {
@@ -151,6 +204,93 @@ fn init_logging_proxy() {
             Ok(())
         })
         .init();
+}
+
+fn remote_cli_bin_dir() -> PathBuf {
+    paths::home_dir()
+        .join(paths::remote_server_dir_relative().as_std_path())
+        .join("bin")
+}
+
+fn install_remote_cli_shim() -> Result<()> {
+    let bin_dir = remote_cli_bin_dir();
+    std::fs::create_dir_all(&bin_dir).context("creating remote cli bin directory")?;
+    let cli_path = bin_dir.join("zed");
+    let current_exe = std::env::current_exe().context("getting remote server executable path")?;
+
+    #[cfg(unix)]
+    {
+        match std::fs::remove_file(&cli_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("removing old remote cli shim"),
+        }
+        std::os::unix::fs::symlink(&current_exe, &cli_path)
+            .context("creating remote cli shim symlink")?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        std::fs::copy(&current_exe, &cli_path).context("copying remote cli shim")?;
+    }
+
+    Ok(())
+}
+
+fn execute_cli(wait: bool, paths: Vec<String>) -> Result<()> {
+    let identifier = std::env::var(remote::REMOTE_SERVER_ID_ENV_VAR).context(
+        "ZED_REMOTE_SERVER_ID is not set; open this terminal from a Zed remote workspace",
+    )?;
+    let server_paths =
+        ServerPaths::new(&identifier).context("locating remote server cli socket")?;
+    let paths = paths
+        .into_iter()
+        .map(resolve_remote_cli_path)
+        .collect::<Result<Vec<_>>>()?;
+    let response = gpui::block_on(async move {
+        let mut stream = UnixStream::connect(&server_paths.cli_socket)
+            .await
+            .with_context(|| {
+                format!(
+                    "connecting to remote cli socket {}",
+                    server_paths.cli_socket.display()
+                )
+            })?;
+        write_remote_cli_message(&mut stream, RemoteCliRequest { paths, wait }).await?;
+        read_remote_cli_message::<RemoteCliResponse>(&mut stream).await
+    })?;
+
+    if !response.stderr.is_empty() {
+        std::io::stderr()
+            .write_all(response.stderr.as_bytes())
+            .context("writing remote cli stderr")?;
+        std::io::stderr()
+            .write_all(b"\n")
+            .context("writing remote cli stderr newline")?;
+    }
+
+    if response.status != 0 {
+        std::process::exit(response.status);
+    }
+
+    Ok(())
+}
+
+fn resolve_remote_cli_path(path: String) -> Result<String> {
+    let parsed = util::paths::PathWithPosition::parse_str(&path);
+    let resolved_path = if parsed.path.is_absolute() {
+        parsed.path
+    } else {
+        std::env::current_dir()
+            .context("getting current directory")?
+            .join(parsed.path)
+    };
+    Ok(util::paths::PathWithPosition {
+        path: resolved_path,
+        row: parsed.row,
+        column: parsed.column,
+    }
+    .to_string(&|path| path.to_string_lossy().into_owned()))
 }
 
 fn init_logging_server(log_file_path: &Path) -> Result<Receiver<Vec<u8>>> {
@@ -280,16 +420,77 @@ struct ServerListeners {
     stdin: UnixListener,
     stdout: UnixListener,
     stderr: UnixListener,
+    cli: UnixListener,
+}
+
+struct ServerIoListeners {
+    stdin: UnixListener,
+    stdout: UnixListener,
+    stderr: UnixListener,
 }
 
 impl ServerListeners {
-    pub fn new(stdin_path: PathBuf, stdout_path: PathBuf, stderr_path: PathBuf) -> Result<Self> {
+    pub fn new(
+        stdin_path: PathBuf,
+        stdout_path: PathBuf,
+        stderr_path: PathBuf,
+        cli_path: PathBuf,
+    ) -> Result<Self> {
         Ok(Self {
             stdin: UnixListener::bind(stdin_path).context("failed to bind stdin socket")?,
             stdout: UnixListener::bind(stdout_path).context("failed to bind stdout socket")?,
             stderr: UnixListener::bind(stderr_path).context("failed to bind stderr socket")?,
+            cli: UnixListener::bind(cli_path).context("failed to bind cli socket")?,
         })
     }
+}
+
+fn start_cli_listener(listener: UnixListener, client: AnyProtoClient, cx: &mut App) {
+    cx.background_spawn(async move {
+        loop {
+            let (mut stream, _) = match listener.accept().await {
+                Ok(stream) => stream,
+                Err(error) => {
+                    log::error!("failed to accept remote cli connection: {error:#}");
+                    break;
+                }
+            };
+            let client = client.clone();
+            smol::spawn(async move {
+                let request: RemoteCliRequest = match read_remote_cli_message(&mut stream).await {
+                    Ok(request) => request,
+                    Err(error) => {
+                        log::error!("failed to read remote cli request: {error:#}");
+                        return;
+                    }
+                };
+
+                let response = match client
+                    .request(proto::OpenRemoteCliPaths {
+                        paths: request.paths,
+                        wait: request.wait,
+                    })
+                    .await
+                    .context("opening remote cli paths")
+                {
+                    Ok(response) => RemoteCliResponse {
+                        status: response.status,
+                        stderr: response.stderr,
+                    },
+                    Err(error) => RemoteCliResponse {
+                        status: 1,
+                        stderr: format!("{error:#}"),
+                    },
+                };
+
+                if let Err(error) = write_remote_cli_message(&mut stream, response).await {
+                    log::error!("failed to write remote cli response: {error:#}");
+                }
+            })
+            .detach();
+        }
+    })
+    .detach();
 }
 
 fn start_server(
@@ -304,6 +505,17 @@ fn start_server(
     let (incoming_tx, incoming_rx) = mpsc::unbounded::<Envelope>();
     let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded::<Envelope>();
     let (app_quit_tx, mut app_quit_rx) = mpsc::unbounded::<()>();
+    let ServerListeners {
+        stdin,
+        stdout,
+        stderr,
+        cli: cli_listener,
+    } = listeners;
+    let listeners = ServerIoListeners {
+        stdin,
+        stdout,
+        stderr,
+    };
 
     cx.on_app_quit(move |_| {
         let mut app_quit_tx = app_quit_tx.clone();
@@ -428,7 +640,15 @@ fn start_server(
     })
     .detach();
 
-    RemoteClient::proto_client_from_channels(incoming_rx, outgoing_tx, cx, "server", is_wsl_interop)
+    let client = RemoteClient::proto_client_from_channels(
+        incoming_rx,
+        outgoing_tx,
+        cx,
+        "server",
+        is_wsl_interop,
+    );
+    start_cli_listener(cli_listener, client.clone(), cx);
+    client
 }
 
 fn init_paths() -> anyhow::Result<()> {
@@ -455,6 +675,7 @@ pub fn execute_run(
     stdin_socket: PathBuf,
     stdout_socket: PathBuf,
     stderr_socket: PathBuf,
+    cli_socket: PathBuf,
 ) -> Result<()> {
     init_paths()?;
 
@@ -505,7 +726,9 @@ pub fn execute_run(
     write_pid_file(&pid_file, pid)
         .with_context(|| format!("failed to write pid file: {:?}", &pid_file))?;
 
-    let listeners = ServerListeners::new(stdin_socket, stdout_socket, stderr_socket)?;
+    install_remote_cli_shim().context("installing remote cli shim")?;
+
+    let listeners = ServerListeners::new(stdin_socket, stdout_socket, stderr_socket, cli_socket)?;
 
     rayon::ThreadPoolBuilder::new()
         .num_threads(std::thread::available_parallelism().map_or(1, |n| n.get().div_ceil(2)))
@@ -659,6 +882,7 @@ struct ServerPaths {
     stdin_socket: PathBuf,
     stdout_socket: PathBuf,
     stderr_socket: PathBuf,
+    cli_socket: PathBuf,
 }
 
 impl ServerPaths {
@@ -680,6 +904,7 @@ impl ServerPaths {
         let stdin_socket = server_dir.join("stdin.sock");
         let stdout_socket = server_dir.join("stdout.sock");
         let stderr_socket = server_dir.join("stderr.sock");
+        let cli_socket = server_dir.join("cli.sock");
         let log_file = logs_dir().join(format!("server-{}.log", identifier));
 
         Ok(Self {
@@ -687,6 +912,7 @@ impl ServerPaths {
             stdin_socket,
             stdout_socket,
             stderr_socket,
+            cli_socket,
             log_file,
         })
     }
@@ -900,6 +1126,7 @@ fn kill_running_server(pid: u32, paths: &ServerPaths) -> Result<(), ExecuteProxy
         &paths.stdin_socket,
         &paths.stdout_socket,
         &paths.stderr_socket,
+        &paths.cli_socket,
     ] {
         log::debug!("cleaning up file {:?} before starting new server", file);
         std::fs::remove_file(file).ok();
@@ -918,6 +1145,9 @@ pub enum SpawnServerError {
 
     #[error("failed to remove stderr socket")]
     RemoveStderrSocket(#[source] std::io::Error),
+
+    #[error("failed to remove cli socket")]
+    RemoveCliSocket(#[source] std::io::Error),
 
     #[error("failed to get current_exe")]
     CurrentExe(#[source] std::io::Error),
@@ -940,6 +1170,9 @@ async fn spawn_server(paths: &ServerPaths) -> Result<(), SpawnServerError> {
     if paths.stderr_socket.exists() {
         std::fs::remove_file(&paths.stderr_socket).map_err(SpawnServerError::RemoveStderrSocket)?;
     }
+    if paths.cli_socket.exists() {
+        std::fs::remove_file(&paths.cli_socket).map_err(SpawnServerError::RemoveCliSocket)?;
+    }
 
     let binary_name = std::env::current_exe().map_err(SpawnServerError::CurrentExe)?;
 
@@ -958,6 +1191,7 @@ async fn spawn_server(paths: &ServerPaths) -> Result<(), SpawnServerError> {
     while !paths.stdout_socket.exists()
         || !paths.stdin_socket.exists()
         || !paths.stderr_socket.exists()
+        || !paths.cli_socket.exists()
     {
         log::debug!("waiting for server to be ready to accept connections...");
         std::thread::sleep(wait_duration);
@@ -979,12 +1213,13 @@ async fn spawn_server(paths: &ServerPaths) -> Result<(), SpawnServerError> {
 fn spawn_server_windows(binary_name: &Path, paths: &ServerPaths) -> Result<(), SpawnServerError> {
     let binary_path = binary_name.to_string_lossy().to_string();
     let parameters = format!(
-        "run --log-file \"{}\" --pid-file \"{}\" --stdin-socket \"{}\" --stdout-socket \"{}\" --stderr-socket \"{}\"",
+        "run --log-file \"{}\" --pid-file \"{}\" --stdin-socket \"{}\" --stdout-socket \"{}\" --stderr-socket \"{}\" --cli-socket \"{}\"",
         paths.log_file.to_string_lossy(),
         paths.pid_file.to_string_lossy(),
         paths.stdin_socket.to_string_lossy(),
         paths.stdout_socket.to_string_lossy(),
-        paths.stderr_socket.to_string_lossy()
+        paths.stderr_socket.to_string_lossy(),
+        paths.cli_socket.to_string_lossy()
     );
 
     let directory = binary_name
@@ -1015,7 +1250,9 @@ fn spawn_server_normal(binary_name: &Path, paths: &ServerPaths) -> Result<(), Sp
         .arg("--stdout-socket")
         .arg(&paths.stdout_socket)
         .arg("--stderr-socket")
-        .arg(&paths.stderr_socket);
+        .arg(&paths.stderr_socket)
+        .arg("--cli-socket")
+        .arg(&paths.cli_socket);
 
     server_process
         .spawn()
