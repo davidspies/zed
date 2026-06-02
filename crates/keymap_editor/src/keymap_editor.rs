@@ -241,9 +241,13 @@ impl SourceFilters {
         match source {
             Some(KeybindSource::User) => self.user,
             Some(KeybindSource::Vim) => self.vim_defaults,
-            Some(KeybindSource::Base | KeybindSource::Default | KeybindSource::Unknown) | None => {
-                self.zed_defaults
-            }
+            Some(
+                KeybindSource::Base
+                | KeybindSource::Default
+                | KeybindSource::Extension
+                | KeybindSource::Unknown,
+            )
+            | None => self.zed_defaults,
         }
     }
 }

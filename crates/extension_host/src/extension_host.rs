@@ -32,8 +32,8 @@ use futures::{
     select_biased,
 };
 use gpui::{
-    App, AppContext as _, AsyncApp, Context, Entity, EventEmitter, Global, Task, TaskExt,
-    UpdateGlobal as _, WeakEntity, actions,
+    App, AppContext as _, AsyncApp, Context, Entity, EventEmitter, Global, KeyBinding, Task,
+    TaskExt, UpdateGlobal as _, WeakEntity, actions,
 };
 use http_client::{AsyncBody, HttpClient, HttpClientWithUrl};
 use language::{
@@ -46,7 +46,10 @@ use release_channel::ReleaseChannel;
 use remote::RemoteClient;
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use settings::{SemanticTokenRules, Settings, SettingsStore};
+use serde_json::json;
+use settings::{
+    KeybindSource, KeymapFile, KeymapFileLoadResult, SemanticTokenRules, Settings, SettingsStore,
+};
 use std::ops::RangeInclusive;
 use std::str::FromStr;
 use std::sync::LazyLock;
@@ -144,6 +147,7 @@ pub struct ExtensionStore {
     pub wasm_host: Arc<WasmHost>,
     pub wasm_extensions: Vec<(Arc<ExtensionManifest>, WasmExtension)>,
     pub editor_command_extensions: BTreeMap<Arc<str>, Arc<dyn extension::Extension>>,
+    pub extension_key_bindings: Vec<KeyBinding>,
     pub tasks: Vec<Task<()>>,
     pub remote_clients: Vec<WeakEntity<RemoteClient>>,
     pub ssh_registered_tx: UnboundedSender<()>,
@@ -159,6 +163,7 @@ pub enum ExtensionOperation {
 #[derive(Clone)]
 pub enum Event {
     ExtensionsUpdated,
+    ExtensionKeymapsUpdated,
     StartedReloading,
     ExtensionInstalled(Arc<str>),
     ExtensionUninstalled(Arc<str>),
@@ -271,6 +276,72 @@ impl ExtensionStore {
         })
     }
 
+    pub fn extension_key_bindings(&self) -> Vec<KeyBinding> {
+        self.extension_key_bindings.clone()
+    }
+
+    fn load_extension_key_bindings(manifest: &ExtensionManifest, cx: &App) -> Vec<KeyBinding> {
+        let sections = manifest
+            .keybindings
+            .iter()
+            .filter_map(|keybinding| {
+                let key = keybinding.platform_key()?;
+                if !manifest.editor_commands.contains_key(&keybinding.command) {
+                    log::warn!(
+                        "Extension {} declares a keybinding for unknown editor command `{}`",
+                        manifest.id,
+                        keybinding.command
+                    );
+                    return None;
+                }
+
+                Some(json!({
+                    "context": keybinding.context.as_deref().unwrap_or("Editor"),
+                    "bindings": {
+                        key: [
+                            "extension::RunEditorCommand",
+                            { "command_id": keybinding.command.as_ref() }
+                        ]
+                    }
+                }))
+            })
+            .collect::<Vec<_>>();
+
+        if sections.is_empty() {
+            return Vec::new();
+        }
+
+        let content = serde_json::to_string(&sections)
+            .expect("extension keybinding sections should serialize");
+        let mut key_bindings = match KeymapFile::load(&content, cx) {
+            KeymapFileLoadResult::Success { key_bindings } => key_bindings,
+            KeymapFileLoadResult::SomeFailedToLoad {
+                key_bindings,
+                error_message,
+            } => {
+                log::error!(
+                    "Some keybindings failed to load for extension {}: {}",
+                    manifest.id,
+                    error_message.0
+                );
+                key_bindings
+            }
+            KeymapFileLoadResult::JsonParseFailure { error } => {
+                log::error!(
+                    "Failed to parse generated keybindings for extension {}: {error}",
+                    manifest.id
+                );
+                Vec::new()
+            }
+        };
+
+        for key_binding in &mut key_bindings {
+            key_binding.set_meta(KeybindSource::Extension.meta());
+        }
+
+        key_bindings
+    }
+
     pub fn new(
         extensions_dir: PathBuf,
         build_dir: Option<PathBuf>,
@@ -310,6 +381,7 @@ impl ExtensionStore {
             ),
             wasm_extensions: Vec::new(),
             editor_command_extensions: BTreeMap::default(),
+            extension_key_bindings: Vec::new(),
             fs,
             http_client,
             telemetry,
@@ -1550,11 +1622,18 @@ impl ExtensionStore {
                     }
                 }
 
+                this.extension_key_bindings = this
+                    .wasm_extensions
+                    .iter()
+                    .chain(wasm_extensions.iter())
+                    .flat_map(|(manifest, _)| Self::load_extension_key_bindings(manifest, cx))
+                    .collect();
                 this.wasm_extensions.extend(wasm_extensions);
                 this.proxy.set_extensions_loaded();
                 this.proxy.reload_current_theme(cx);
                 this.proxy.reload_current_icon_theme(cx);
                 trigger_suppressed_extension_removal(this, cx);
+                cx.emit(Event::ExtensionKeymapsUpdated);
 
                 if let Some(events) = ExtensionEvents::try_global(cx) {
                     events.update(cx, |this, cx| {

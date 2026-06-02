@@ -1937,6 +1937,7 @@ pub fn handle_keymap_file_changes(
     cx: &mut App,
 ) {
     let (base_keymap_tx, mut base_keymap_rx) = mpsc::unbounded();
+    let (extension_keymap_tx, mut extension_keymap_rx) = mpsc::unbounded();
     let (keyboard_layout_tx, mut keyboard_layout_rx) = mpsc::unbounded();
     let mut old_base_keymap = *BaseKeymap::get_global(cx);
     let mut old_vim_enabled = VimModeSetting::get_global(cx).0;
@@ -1956,6 +1957,14 @@ pub fn handle_keymap_file_changes(
             old_helix_enabled = new_helix_enabled;
 
             base_keymap_tx.unbounded_send(()).unwrap();
+        }
+    })
+    .detach();
+
+    let extension_store = ExtensionStore::global(cx);
+    cx.subscribe(&extension_store, move |_, event, _| {
+        if matches!(event, extension_host::Event::ExtensionKeymapsUpdated) {
+            extension_keymap_tx.unbounded_send(()).ok();
         }
     })
     .detach();
@@ -1998,6 +2007,7 @@ pub fn handle_keymap_file_changes(
         loop {
             select_biased! {
                 _ = base_keymap_rx.next() => {},
+                _ = extension_keymap_rx.next() => {},
                 _ = keyboard_layout_rx.next() => {},
                 content = user_keymap_file_rx.next() => {
                     if let Some(content) = content {
@@ -2155,6 +2165,8 @@ pub fn load_default_keymap(cx: &mut App) {
             KeymapFile::load_asset(VIM_KEYMAP_PATH, Some(KeybindSource::Vim), cx).unwrap(),
         );
     }
+
+    cx.bind_keys(ExtensionStore::global(cx).read(cx).extension_key_bindings());
 }
 
 pub fn open_new_ssh_project_from_project(

@@ -111,6 +111,8 @@ pub struct ExtensionManifest {
     #[serde(default)]
     pub editor_commands: BTreeMap<Arc<str>, EditorCommandManifestEntry>,
     #[serde(default)]
+    pub keybindings: Vec<KeyBindingManifestEntry>,
+    #[serde(default)]
     pub snippets: Option<ExtensionSnippets>,
     #[serde(default)]
     pub capabilities: Vec<ExtensionCapability>,
@@ -364,6 +366,34 @@ pub struct DebugAdapterManifestEntry {
 #[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
 pub struct DebugLocatorManifestEntry {}
 
+#[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
+pub struct KeyBindingManifestEntry {
+    pub command: Arc<str>,
+    #[serde(default)]
+    pub context: Option<String>,
+    #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default)]
+    pub macos: Option<String>,
+    #[serde(default)]
+    pub linux: Option<String>,
+    #[serde(default)]
+    pub windows: Option<String>,
+}
+
+impl KeyBindingManifestEntry {
+    pub fn platform_key(&self) -> Option<&str> {
+        #[cfg(target_os = "macos")]
+        let platform_key = self.macos.as_deref();
+        #[cfg(target_os = "linux")]
+        let platform_key = self.linux.as_deref();
+        #[cfg(target_os = "windows")]
+        let platform_key = self.windows.as_deref();
+
+        platform_key.or(self.key.as_deref())
+    }
+}
+
 /// Manifest entry for a language model provider.
 #[derive(Clone, PartialEq, Eq, Debug, Deserialize, Serialize)]
 pub struct LanguageModelProviderManifestEntry {
@@ -440,6 +470,7 @@ fn manifest_from_old_manifest(
         context_servers: BTreeMap::default(),
         slash_commands: BTreeMap::default(),
         editor_commands: BTreeMap::default(),
+        keybindings: Vec::new(),
         snippets: None,
         capabilities: Vec::new(),
         debug_adapters: Default::default(),
@@ -475,6 +506,7 @@ mod tests {
             context_servers: BTreeMap::default(),
             slash_commands: BTreeMap::default(),
             editor_commands: BTreeMap::default(),
+            keybindings: Vec::new(),
             snippets: None,
             capabilities: vec![],
             debug_adapters: Default::default(),
@@ -516,6 +548,40 @@ mod tests {
         assert!(manifest.allow_exec("ls", &["-la"]).is_ok());
         assert!(manifest.allow_exec("ls", &["-l"]).is_err());
         assert!(manifest.allow_exec("pwd", &[] as &[&str]).is_err());
+    }
+
+    #[test]
+    fn test_deserialize_manifest_with_keybindings() {
+        use indoc::indoc;
+
+        let content = indoc! {r#"
+            id = "test-manifest"
+            name = "Test Manifest"
+            version = "0.0.1"
+            schema_version = 1
+
+            [editor_commands."test.command"]
+            description = "Run a test command"
+
+            [[keybindings]]
+            command = "test.command"
+            context = "Editor"
+            key = "ctrl-alt-shift-h"
+            macos = "cmd-alt-shift-h"
+        "#};
+
+        let manifest: ExtensionManifest = toml::from_str(content).expect("manifest should parse");
+        assert_eq!(manifest.keybindings.len(), 1);
+        assert_eq!(manifest.keybindings[0].command.as_ref(), "test.command");
+        assert_eq!(manifest.keybindings[0].context.as_deref(), Some("Editor"));
+        assert_eq!(
+            manifest.keybindings[0].key.as_deref(),
+            Some("ctrl-alt-shift-h")
+        );
+        assert_eq!(
+            manifest.keybindings[0].macos.as_deref(),
+            Some("cmd-alt-shift-h")
+        );
     }
 
     #[test]

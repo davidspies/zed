@@ -1332,6 +1332,7 @@ pub enum KeybindSource {
     User,
     Vim,
     Base,
+    Extension,
     #[default]
     Default,
     Unknown,
@@ -1340,6 +1341,7 @@ pub enum KeybindSource {
 impl KeybindSource {
     const BASE: KeyBindingMetaIndex = KeyBindingMetaIndex(KeybindSource::Base as u32);
     const DEFAULT: KeyBindingMetaIndex = KeyBindingMetaIndex(KeybindSource::Default as u32);
+    const EXTENSION: KeyBindingMetaIndex = KeyBindingMetaIndex(KeybindSource::Extension as u32);
     const VIM: KeyBindingMetaIndex = KeyBindingMetaIndex(KeybindSource::Vim as u32);
     const USER: KeyBindingMetaIndex = KeyBindingMetaIndex(KeybindSource::User as u32);
 
@@ -1348,6 +1350,7 @@ impl KeybindSource {
             KeybindSource::User => "User",
             KeybindSource::Default => "Default",
             KeybindSource::Base => "Base",
+            KeybindSource::Extension => "Extension",
             KeybindSource::Vim => "Vim",
             KeybindSource::Unknown => "Unknown",
         }
@@ -1358,6 +1361,7 @@ impl KeybindSource {
             KeybindSource::User => Self::USER,
             KeybindSource::Default => Self::DEFAULT,
             KeybindSource::Base => Self::BASE,
+            KeybindSource::Extension => Self::EXTENSION,
             KeybindSource::Vim => Self::VIM,
             KeybindSource::Unknown => KeyBindingMetaIndex(*self as u32),
         }
@@ -1367,6 +1371,7 @@ impl KeybindSource {
         match index {
             Self::USER => KeybindSource::User,
             Self::BASE => KeybindSource::Base,
+            Self::EXTENSION => KeybindSource::Extension,
             Self::DEFAULT => KeybindSource::Default,
             Self::VIM => KeybindSource::Vim,
             _ => KeybindSource::Unknown,

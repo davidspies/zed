@@ -495,7 +495,6 @@ fn main() {
         settings::init(cx);
         zlog_settings::init(cx);
         zed::watch_settings_files(fs.clone(), cx);
-        handle_keymap_file_changes(user_keymap_file_rx, user_keymap_watcher, cx);
 
         let user_agent = format!(
             "Zed/{} ({}; {})",
@@ -663,6 +662,7 @@ fn main() {
             app_state.node_runtime.clone(),
             cx,
         );
+        handle_keymap_file_changes(user_keymap_file_rx, user_keymap_watcher, cx);
 
         theme_settings::init(theme::LoadThemes::All(Box::new(Assets)), cx);
         eager_load_active_theme_and_icon_theme(fs.clone(), cx);
