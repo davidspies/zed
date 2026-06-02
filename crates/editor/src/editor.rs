@@ -62,6 +62,7 @@ mod clipboard;
 mod code_actions;
 mod completions;
 mod config;
+mod delimiters;
 mod diagnostics;
 mod edit_prediction;
 mod input;
