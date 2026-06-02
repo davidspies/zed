@@ -465,6 +465,18 @@ impl AnyProtoClient {
             )
     }
 
+    pub fn has_message_handler<M>(&self) -> bool
+    where
+        M: EnvelopedMessage + 'static,
+    {
+        self.0
+            .client
+            .message_handler_set()
+            .lock()
+            .message_handlers
+            .contains_key(&TypeId::of::<M>())
+    }
+
     pub fn add_entity_request_handler<M, E, H, F>(&self, handler: H)
     where
         M: EnvelopedMessage + RequestMessage + EntityMessage,
