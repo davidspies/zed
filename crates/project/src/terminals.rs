@@ -663,7 +663,8 @@ fn prepend_remote_cli_path_activation(activation_script: &mut Vec<String>, shell
 }
 
 fn remote_cli_path_activation(shell_kind: ShellKind) -> Option<String> {
-    let remote_cli_bin_dir = paths::remote_server_dir_relative().join(RelPath::from_unix_str("bin").ok()?);
+    let remote_cli_bin_dir =
+        paths::remote_server_dir_relative().join(RelPath::from_unix_str("bin").ok()?);
     let remote_cli_bin_dir = remote_cli_bin_dir.as_unix_str();
 
     match shell_kind {
