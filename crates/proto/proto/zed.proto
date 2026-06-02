@@ -484,7 +484,9 @@ message Envelope {
     SearchCommits search_commits = 449;
     SearchCommitsResponse search_commits_response = 450;
     GetInitialGraphData get_initial_graph_data = 451;
-    GetInitialGraphDataResponse get_initial_graph_data_response = 452; // current max
+    GetInitialGraphDataResponse get_initial_graph_data_response = 452;
+    OpenRemoteCliPaths open_remote_cli_paths = 457;
+    OpenRemoteCliPathsResponse open_remote_cli_paths_response = 458; // current max
   }
 
   reserved 87 to 88;
@@ -561,6 +563,16 @@ message FlushBufferedMessages {}
 message FlushBufferedMessagesResponse {}
 
 message RemoteStarted {}
+
+message OpenRemoteCliPaths {
+  repeated string paths = 1;
+  bool wait = 2;
+}
+
+message OpenRemoteCliPathsResponse {
+  int32 status = 1;
+  string stderr = 2;
+}
 
 message SpawnKernel {
   string kernel_name = 1;
