@@ -9043,6 +9043,72 @@ async fn test_unstaged_diff_for_buffer(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+async fn test_git_diff_for_symlink_buffer_does_not_diff_target_contents(
+    cx: &mut gpui::TestAppContext,
+) {
+    init_test(cx);
+
+    let fs = FakeFs::new(cx.background_executor.clone());
+    fs.insert_tree(
+        "/dir",
+        json!({
+            ".git": {},
+            "target.rs": "fn target() {}\n",
+        }),
+    )
+    .await;
+    fs.insert_symlink("/dir/link.rs", PathBuf::from("target.rs"))
+        .await;
+    fs.set_head_and_index_for_repo(
+        Path::new("/dir/.git"),
+        &[("target.rs", "fn target() {}\n".into())],
+    );
+
+    let project = Project::test(fs.clone(), ["/dir".as_ref()], cx).await;
+    let buffer = project
+        .update(cx, |project, cx| {
+            project.open_local_buffer("/dir/link.rs", cx)
+        })
+        .await
+        .unwrap();
+
+    let unstaged_diff = project
+        .update(cx, |project, cx| {
+            project.open_unstaged_diff(buffer.clone(), cx)
+        })
+        .await
+        .unwrap();
+    let uncommitted_diff = project
+        .update(cx, |project, cx| {
+            project.open_uncommitted_diff(buffer.clone(), cx)
+        })
+        .await
+        .unwrap();
+
+    cx.run_until_parked();
+    let snapshot = buffer.read_with(cx, |buffer, _| buffer.snapshot());
+    unstaged_diff.read_with(cx, |diff, cx| {
+        assert!(diff.snapshot(cx).hunks(&snapshot).next().is_none());
+    });
+    uncommitted_diff.read_with(cx, |diff, cx| {
+        assert!(diff.snapshot(cx).hunks(&snapshot).next().is_none());
+    });
+
+    buffer.update(cx, |buffer, cx| {
+        buffer.edit([(0..0, "// changed through symlink\n")], None, cx)
+    });
+
+    cx.run_until_parked();
+    let snapshot = buffer.read_with(cx, |buffer, _| buffer.snapshot());
+    unstaged_diff.read_with(cx, |diff, cx| {
+        assert!(diff.snapshot(cx).hunks(&snapshot).next().is_none());
+    });
+    uncommitted_diff.read_with(cx, |diff, cx| {
+        assert!(diff.snapshot(cx).hunks(&snapshot).next().is_none());
+    });
+}
+
+#[gpui::test]
 async fn test_uncommitted_diff_for_buffer(cx: &mut gpui::TestAppContext) {
     init_test(cx);
 

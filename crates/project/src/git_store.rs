@@ -158,6 +158,12 @@ enum DiffBasesChange {
     SetBoth(Option<String>),
 }
 
+fn symlink_diff_bases_change(buffer: &Buffer, cx: &App) -> Option<DiffBasesChange> {
+    File::from_dyn(buffer.file())
+        .is_some_and(|file| file.is_symlink(cx))
+        .then(|| DiffBasesChange::SetBoth(Some(buffer.text())))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum DiffKind {
     Unstaged,
@@ -1060,7 +1066,7 @@ impl GitStore {
         buffer_entity: Entity<Buffer>,
         cx: &mut AsyncApp,
     ) -> Result<Entity<BufferDiff>> {
-        let diff_bases_change = match texts {
+        let mut diff_bases_change = match texts {
             Err(e) => {
                 this.update(cx, |this, cx| {
                     let buffer = buffer_entity.read(cx);
@@ -1078,6 +1084,9 @@ impl GitStore {
             let language = buffer.language().cloned();
             let language_registry = buffer.language_registry();
             let text_snapshot = buffer.text_snapshot();
+            if let Some(symlink_diff_bases_change) = symlink_diff_bases_change(buffer, cx) {
+                diff_bases_change = symlink_diff_bases_change;
+            }
             this.loading_diffs.remove(&(buffer_id, kind));
 
             let git_store = cx.weak_entity();
@@ -1796,7 +1805,10 @@ impl GitStore {
                                 .await?;
 
                             diff_state.update(cx, |diff_state, cx| {
-                                let buffer_snapshot = buffer.read(cx).text_snapshot();
+                                let buffer = buffer.read(cx);
+                                let diff_bases_change = symlink_diff_bases_change(buffer, cx)
+                                    .unwrap_or(diff_bases_change);
+                                let buffer_snapshot = buffer.text_snapshot();
                                 diff_state.diff_bases_changed(
                                     buffer_snapshot,
                                     Some(diff_bases_change),
@@ -1822,9 +1834,19 @@ impl GitStore {
         let mut futures = Vec::new();
         for buffer in buffers {
             if let Some(diff_state) = self.diffs.get_mut(&buffer.read(cx).remote_id()) {
-                let buffer = buffer.read(cx).text_snapshot();
+                let (buffer, diff_bases_change) = {
+                    let buffer = buffer.read(cx);
+                    (
+                        buffer.text_snapshot(),
+                        symlink_diff_bases_change(buffer, cx),
+                    )
+                };
                 diff_state.update(cx, |diff_state, cx| {
-                    diff_state.recalculate_diffs(buffer.clone(), cx);
+                    if let Some(diff_bases_change) = diff_bases_change {
+                        diff_state.diff_bases_changed(buffer.clone(), Some(diff_bases_change), cx);
+                    } else {
+                        diff_state.recalculate_diffs(buffer.clone(), cx);
+                    }
                     futures.extend(diff_state.wait_for_recalculation().map(FutureExt::boxed));
                 });
                 futures.push(diff_state.update(cx, |diff_state, cx| {
@@ -4733,7 +4755,13 @@ impl Repository {
 
                 git_store.update(&mut cx, |git_store, cx| {
                     for (buffer, diff_bases_change) in buffer_diff_base_changes {
-                        let buffer_snapshot = buffer.read(cx).text_snapshot();
+                        let (buffer_snapshot, diff_bases_change) = {
+                            let buffer = buffer.read(cx);
+                            let buffer_snapshot = buffer.text_snapshot();
+                            let diff_bases_change =
+                                symlink_diff_bases_change(buffer, cx).or(diff_bases_change);
+                            (buffer_snapshot, diff_bases_change)
+                        };
                         let buffer_id = buffer_snapshot.remote_id();
                         let Some(diff_state) = git_store.diffs.get(&buffer_id) else {
                             continue;

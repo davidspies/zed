@@ -3557,6 +3557,15 @@ impl File {
         })
     }
 
+    pub fn is_symlink(&self, cx: &App) -> bool {
+        self.entry_id.is_some_and(|entry_id| {
+            self.worktree
+                .read(cx)
+                .entry_for_id(entry_id)
+                .is_some_and(|entry| entry.is_file() && entry.canonical_path.is_some())
+        })
+    }
+
     pub fn worktree_id(&self, cx: &App) -> WorktreeId {
         self.worktree.read(cx).id()
     }
