@@ -390,7 +390,6 @@ impl EditorElement {
         register_action(editor, window, Editor::move_to_start_of_larger_syntax_node);
         register_action(editor, window, Editor::move_to_end_of_larger_syntax_node);
         register_action(editor, window, Editor::select_enclosing_symbol);
-        register_action(editor, window, Editor::select_inside_enclosing_bracket);
         register_action(editor, window, Editor::select_bracket_content);
         register_action(editor, window, Editor::select_quote_content);
         register_action(editor, window, Editor::move_to_enclosing_bracket);
