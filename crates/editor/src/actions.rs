@@ -815,8 +815,6 @@ actions!(
         SelectDown,
         /// Selects the enclosing symbol.
         SelectEnclosingSymbol,
-        /// Selects inside the innermost enclosing bracket pair.
-        SelectInsideEnclosingBracket,
         /// Selects the contents of the surrounding bracket pair.
         SelectBracketContent,
         /// Selects the contents of the surrounding quote pair.
