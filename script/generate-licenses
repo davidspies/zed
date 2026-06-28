@@ -5,6 +5,8 @@ set -euo pipefail
 CARGO_ABOUT_VERSION="0.8.2"
 OUTPUT_FILE="${1:-$(pwd)/assets/licenses.md}"
 TEMPLATE_FILE="script/licenses/template.md.hbs"
+TMP_OUTPUT_FILE="$(mktemp "${OUTPUT_FILE}.tmp.XXXXXX")"
+trap 'rm -f "$TMP_OUTPUT_FILE"' EXIT
 
 fail_on_stderr() {
     local tmpfile=$(mktemp)
@@ -15,7 +17,7 @@ fail_on_stderr() {
     return $rc
 }
 
-echo -n "" >"$OUTPUT_FILE"
+echo -n "" >"$TMP_OUTPUT_FILE"
 
 {
     echo -e "# ###### THEME LICENSES ######\n"
@@ -25,7 +27,7 @@ echo -n "" >"$OUTPUT_FILE"
     cat assets/icons/LICENSES
 
     echo -e "\n# ###### CODE LICENSES ######\n"
-} >>"$OUTPUT_FILE"
+} >>"$TMP_OUTPUT_FILE"
 
 if ! cargo about --version | grep "cargo-about $CARGO_ABOUT_VERSION" &>/dev/null; then
     echo "Installing cargo-about@$CARGO_ABOUT_VERSION..."
@@ -41,16 +43,22 @@ set -x
 $WRAPPER cargo about generate \
     $FAIL_FLAG \
     -c script/licenses/zed-licenses.toml \
-    "$TEMPLATE_FILE" >>"$OUTPUT_FILE"
+    "$TEMPLATE_FILE" >>"$TMP_OUTPUT_FILE"
 set +x
 
-sed -i.bak 's/&quot;/"/g' "$OUTPUT_FILE"
-sed -i.bak 's/&#x27;/'\''/g' "$OUTPUT_FILE" # The ` '\'' ` thing ends the string, appends a single quote, and re-opens the string
-sed -i.bak 's/&#x3D;/=/g' "$OUTPUT_FILE"
-sed -i.bak 's/&#x60;/`/g' "$OUTPUT_FILE"
-sed -i.bak 's/&lt;/</g' "$OUTPUT_FILE"
-sed -i.bak 's/&gt;/>/g' "$OUTPUT_FILE"
+sed -i.bak 's/&quot;/"/g' "$TMP_OUTPUT_FILE"
+sed -i.bak 's/&#x27;/'\''/g' "$TMP_OUTPUT_FILE" # The ` '\'' ` thing ends the string, appends a single quote, and re-opens the string
+sed -i.bak 's/&#x3D;/=/g' "$TMP_OUTPUT_FILE"
+sed -i.bak 's/&#x60;/`/g' "$TMP_OUTPUT_FILE"
+sed -i.bak 's/&lt;/</g' "$TMP_OUTPUT_FILE"
+sed -i.bak 's/&gt;/>/g' "$TMP_OUTPUT_FILE"
 
-rm -rf "${OUTPUT_FILE}.bak"
+rm -rf "${TMP_OUTPUT_FILE}.bak"
+
+if [[ -f "$OUTPUT_FILE" ]] && cmp -s "$TMP_OUTPUT_FILE" "$OUTPUT_FILE"; then
+    rm -f "$TMP_OUTPUT_FILE"
+else
+    mv "$TMP_OUTPUT_FILE" "$OUTPUT_FILE"
+fi
 
 echo "generate-licenses completed. See $OUTPUT_FILE"

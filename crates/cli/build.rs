@@ -10,8 +10,20 @@ fn main() {
         println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=10.15.7");
     }
 
-    // Populate git sha environment variable if git is available
-    println!("cargo:rerun-if-changed=../../.git/logs/HEAD");
+    // Populate git sha environment variable if git is available.
+    // Use git's resolved path so submodule-style .git files don't force rebuilds.
+    if let Some(output) = Command::new("git")
+        .args(["rev-parse", "--git-path", "logs/HEAD"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+    {
+        let git_head_log = String::from_utf8_lossy(&output.stdout);
+        println!("cargo:rerun-if-changed={}", git_head_log.trim());
+    } else {
+        println!("cargo:rerun-if-changed=../../.git/logs/HEAD");
+    }
+
     if let Some(output) = Command::new("git")
         .args(["rev-parse", "HEAD"])
         .output()
