@@ -600,6 +600,22 @@ impl AutoUpdater {
         arch: &str,
         cx: &mut AsyncApp,
     ) -> Result<ReleaseAsset> {
+        // This build carries local patches that change the remote server, so the official
+        // zed.dev releases would hand us an incompatible binary. Fetch the remote server
+        // from the davidspies/zed fork's releases instead (published by zed_setup/update.sh).
+        if asset == "zed-remote-server" {
+            let mut version =
+                version.context("cannot fetch the forked remote server without a version")?;
+            version.pre = semver::Prerelease::EMPTY;
+            version.build = semver::BuildMetadata::EMPTY;
+            return Ok(ReleaseAsset {
+                version: version.to_string(),
+                url: format!(
+                    "https://github.com/davidspies/zed/releases/download/v{version}-dspyz/zed-remote-server-{os}-{arch}.gz"
+                ),
+            });
+        }
+
         let client = this.read_with(cx, |this, _| this.client.clone());
 
         let (system_id, metrics_id, is_staff) = if client.telemetry().metrics_enabled() {
