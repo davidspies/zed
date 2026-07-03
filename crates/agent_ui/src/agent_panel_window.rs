@@ -20,41 +20,33 @@ pub(crate) fn open_agent_panel_window(
     let Some(panel) = workspace.panel::<AgentPanel>(cx) else {
         return;
     };
+    if let Some(existing) = panel.read(cx).popout_window() {
+        existing
+            .update(cx, |_, window, _| window.activate_window())
+            .ok();
+        return;
+    }
     let position = panel.read(cx).position(window, cx);
     let dock = workspace.dock_at_position(position).clone();
     dock.update(cx, |dock, cx| dock.set_open(false, window, cx));
-    AgentPanelWindow::open(workspace.weak_handle(), window.window_handle(), cx);
+    AgentPanelWindow::open(panel, workspace.weak_handle(), window.window_handle(), cx);
 }
 
 struct AgentPanelWindow {
     title_bar: Option<Entity<PlatformTitleBar>>,
     workspace: WeakEntity<Workspace>,
     source_window: AnyWindowHandle,
-    agent_panel: Option<Entity<AgentPanel>>,
+    agent_panel: Entity<AgentPanel>,
     focus_handle: FocusHandle,
 }
 
 impl AgentPanelWindow {
-    fn open(workspace: WeakEntity<Workspace>, source_window: AnyWindowHandle, cx: &mut App) {
-        for window_handle in cx.windows() {
-            let Some(existing) = window_handle.downcast::<Self>() else {
-                continue;
-            };
-            let activated = existing
-                .update(cx, |agent_panel_window, window, _cx| {
-                    if agent_panel_window.workspace.entity_id() == workspace.entity_id() {
-                        window.activate_window();
-                        true
-                    } else {
-                        false
-                    }
-                })
-                .unwrap_or(false);
-            if activated {
-                return;
-            }
-        }
-
+    fn open(
+        agent_panel: Entity<AgentPanel>,
+        workspace: WeakEntity<Workspace>,
+        source_window: AnyWindowHandle,
+        cx: &mut App,
+    ) {
         // We have to defer this to get the workspace off the stack.
         cx.defer(move |cx| {
             let current_rem_size: f32 = ThemeSettings::get_global(cx).ui_font_size(cx).into();
@@ -90,13 +82,16 @@ impl AgentPanelWindow {
                     window_bounds: Some(WindowBounds::centered(scaled_bounds, cx)),
                     ..Default::default()
                 },
-                |window, cx| cx.new(|cx| Self::new(workspace, source_window, window, cx)),
+                |window, cx| {
+                    cx.new(|cx| Self::new(agent_panel, workspace, source_window, window, cx))
+                },
             )
             .log_err();
         });
     }
 
     fn new(
+        agent_panel: Entity<AgentPanel>,
         workspace: WeakEntity<Workspace>,
         source_window: AnyWindowHandle,
         window: &mut Window,
@@ -105,27 +100,19 @@ impl AgentPanelWindow {
         let title_bar = (!cfg!(target_os = "macos"))
             .then(|| cx.new(|cx| PlatformTitleBar::new("agent-panel-window-title-bar", cx)));
 
-        cx.spawn_in(window, {
-            let workspace = workspace.clone();
-            async move |this, cx| {
-                let panel = AgentPanel::load(workspace.clone(), cx.clone()).await?;
-                this.update_in(cx, |this, window, cx| {
-                    panel.update(cx, |panel, cx| {
-                        panel.set_active(true, window, cx);
-                        panel.initialize_from_source_workspace_if_needed(workspace, window, cx);
-                    });
-                    panel.focus_handle(cx).focus(window, cx);
-                    this.agent_panel = Some(panel);
-                    cx.notify();
-                })
-            }
-        })
-        .detach_and_log_err(cx);
+        agent_panel.update(cx, |panel, cx| {
+            panel.set_popout_window(Some(window.window_handle()), cx);
+            panel.set_active(true, window, cx);
+        });
+        agent_panel.focus_handle(cx).focus(window, cx);
 
-        // When this window closes, reveal the panel in the source workspace's
-        // dock again. Ignore failures: the source window or workspace may
-        // already be gone (e.g. when quitting the app).
+        // When this window closes, hand the panel back to the source
+        // workspace's dock. Ignore failures: the source window or workspace
+        // may already be gone (e.g. when quitting the app).
         cx.on_release(|this, cx| {
+            this.agent_panel.update(cx, |panel, cx| {
+                panel.set_popout_window(None, cx);
+            });
             let workspace = this.workspace.clone();
             this.source_window
                 .update(cx, |_, window, cx| {
@@ -143,7 +130,7 @@ impl AgentPanelWindow {
             title_bar,
             workspace,
             source_window,
-            agent_panel: None,
+            agent_panel,
             focus_handle: cx.focus_handle(),
         }
     }
@@ -168,7 +155,7 @@ impl Render for AgentPanelWindow {
                         .flex_1()
                         .min_h_0()
                         .w_full()
-                        .children(self.agent_panel.clone()),
+                        .child(self.agent_panel.clone()),
                 ),
             window,
             cx,
