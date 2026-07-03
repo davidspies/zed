@@ -8,8 +8,8 @@ use collections::HashMap;
 
 use fs::Fs;
 use gpui::{
-    Action, AnyElement, Entity, EventEmitter, Focusable, Font, Pixels, Subscription, WeakEntity,
-    canvas, prelude::*,
+    Action, AnyElement, AnyWindowHandle, Entity, EventEmitter, Focusable, Font, Pixels,
+    Subscription, WeakEntity, canvas, prelude::*,
 };
 
 use language::{Buffer, Capability, HighlightedText};
@@ -585,6 +585,10 @@ impl RenderOnce for DiffStyleControls {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Action, Default)]
+#[action(namespace = editor)]
+pub struct PopOutSplitDiff;
+
 pub struct SplittableEditor {
     rhs_multibuffer: Entity<MultiBuffer>,
     rhs_editor: Entity<Editor>,
@@ -598,6 +602,9 @@ pub struct SplittableEditor {
     /// mode, regardless of the current diff view style setting.
     too_narrow_for_split: bool,
     last_width: Option<Pixels>,
+    /// While set, the lhs editor is rendered in this separate window instead
+    /// of side-by-side in the main window.
+    lhs_popout_window: Option<AnyWindowHandle>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -753,6 +760,7 @@ impl SplittableEditor {
             searched_side: None,
             too_narrow_for_split: false,
             last_width: None,
+            lhs_popout_window: None,
             _subscriptions: subscriptions,
         }
     }
@@ -1073,6 +1081,46 @@ impl SplittableEditor {
         }
     }
 
+    pub fn lhs_popout_window(&self) -> Option<AnyWindowHandle> {
+        self.lhs_popout_window
+    }
+
+    pub(crate) fn set_lhs_popout_window(
+        &mut self,
+        window: Option<AnyWindowHandle>,
+        cx: &mut Context<Self>,
+    ) {
+        self.lhs_popout_window = window;
+        cx.notify();
+    }
+
+    /// Moves the lhs (old text) side of the split into its own window,
+    /// leaving only the rhs (new text) in this window. Invoked again while
+    /// popped out, it closes the window, folding the lhs back into the
+    /// side-by-side view.
+    pub fn pop_out_split_diff(
+        &mut self,
+        _: &PopOutSplitDiff,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(popout_window) = self.lhs_popout_window {
+            popout_window
+                .update(cx, |_, window, _| window.remove_window())
+                .ok();
+            return;
+        }
+        if !self.is_split() {
+            // Split without changing `diff_view_style`: the style tracks the
+            // user setting, and the pop-out is a transient per-editor state.
+            self.split(window, cx);
+        }
+        if self.lhs.is_none() {
+            return;
+        }
+        crate::split_popout_window::open_lhs_popout_window(cx.entity(), window.window_handle(), cx);
+    }
+
     fn intercept_toggle_breakpoint(
         &mut self,
         _: &ToggleBreakpoint,
@@ -1191,6 +1239,11 @@ impl SplittableEditor {
     }
 
     fn unsplit(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(popout_window) = self.lhs_popout_window.take() {
+            popout_window
+                .update(cx, |_, window, _| window.remove_window())
+                .ok();
+        }
         let Some(lhs) = self.lhs.take() else {
             return;
         };
@@ -1448,7 +1501,11 @@ impl SplittableEditor {
         match self.diff_view_style {
             DiffViewStyle::Unified => {}
             DiffViewStyle::Split => {
-                if self.too_narrow_for_split && is_split {
+                if self.lhs_popout_window.is_some() {
+                    // The lhs lives in its own window and this window only
+                    // shows the rhs, so this window's width must not
+                    // collapse the split.
+                } else if self.too_narrow_for_split && is_split {
                     self.unsplit(window, cx);
                 } else if !self.too_narrow_for_split && !is_split {
                     self.split(window, cx);
@@ -2320,7 +2377,7 @@ impl Render for SplittableEditor {
         cx: &mut ui::Context<Self>,
     ) -> impl ui::IntoElement {
         let is_split = self.lhs.is_some();
-        let inner = if is_split {
+        let inner = if is_split && self.lhs_popout_window.is_none() {
             let style = self.rhs_editor.read(cx).create_style(cx);
             SplitEditorView::new(cx.entity(), style, self.split_state.clone()).into_any_element()
         } else {
@@ -2333,6 +2390,7 @@ impl Render for SplittableEditor {
         div()
             .id("splittable-editor")
             .on_action(cx.listener(Self::toggle_split))
+            .on_action(cx.listener(Self::pop_out_split_diff))
             .on_action(cx.listener(Self::activate_pane_left))
             .on_action(cx.listener(Self::activate_pane_right))
             .on_action(cx.listener(Self::intercept_toggle_breakpoint))

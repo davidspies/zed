@@ -45,6 +45,7 @@ mod selections_collection;
 pub mod semantic_tokens;
 mod split;
 pub mod split_editor_view;
+mod split_popout_window;
 
 mod bookmarks;
 #[cfg(test)]
@@ -128,7 +129,7 @@ pub use multi_buffer::{
     MultiBufferOffset, MultiBufferOffsetUtf16, MultiBufferSnapshot, PathKey, RowInfo, ToOffset,
     ToPoint,
 };
-pub use split::{DiffStyleControls, SplittableEditor, ToggleSplitDiff};
+pub use split::{DiffStyleControls, PopOutSplitDiff, SplittableEditor, ToggleSplitDiff};
 pub use split_editor_view::SplitEditorView;
 pub use text::Bias;
 
