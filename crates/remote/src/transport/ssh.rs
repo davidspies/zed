@@ -14,7 +14,7 @@ use futures::{
 use gpui::{App, AppContext as _, AsyncApp, Task};
 use parking_lot::Mutex;
 use paths::remote_server_dir_relative;
-use release_channel::{AppVersion, ReleaseChannel};
+use release_channel::{AppCommitSha, AppVersion, ReleaseChannel};
 use rpc::proto::Envelope;
 use semver::Version;
 pub use settings::SshPortForwardOption;
@@ -805,9 +805,17 @@ impl SshRemoteConnection {
         version: Version,
         cx: &mut AsyncApp,
     ) -> Result<Arc<RelPath>> {
+        // Include the build commit in the cached binary name so that remotes
+        // provisioned from an older fork release re-download the server when
+        // a new build is published under the same version.
+        let commit_suffix = cx
+            .update(|cx| AppCommitSha::try_global(cx))
+            .map(|sha| format!("-{}", sha.short()))
+            .unwrap_or_default();
         let version_str = match release_channel {
             ReleaseChannel::Dev => "build".to_string(),
-            _ => version.to_string(),
+            ReleaseChannel::Nightly => version.to_string(),
+            _ => format!("{}{}", version, commit_suffix),
         };
         let binary_name = format!(
             "zed-remote-server-{}-{}{}",
