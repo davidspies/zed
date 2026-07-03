@@ -219,7 +219,13 @@ impl DockerExecConnection {
                 format!("{}-{}", version, commit)
             }
             ReleaseChannel::Dev => "build".to_string(),
-            _ => version.to_string(),
+            // Include the build commit in the cached binary name so that
+            // remotes provisioned from an older fork release re-download the
+            // server when a new build is published under the same version.
+            _ => match &commit {
+                Some(sha) => format!("{}-{}", version, sha.short()),
+                None => version.to_string(),
+            },
         };
         let binary_name = format!(
             "zed-remote-server-{}-{}",
