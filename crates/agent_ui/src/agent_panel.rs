@@ -1190,6 +1190,7 @@ pub struct AgentPanel {
     last_context_source: Option<AgentContextSource>,
 
     is_active: bool,
+    popout_window: Option<gpui::AnyWindowHandle>,
 }
 
 impl AgentPanel {
@@ -1593,10 +1594,40 @@ impl AgentPanel {
             _thread_metadata_store_subscription,
             last_context_source: None,
             is_active: false,
+            popout_window: None,
         };
 
         panel.ensure_native_agent_connection(cx);
         panel
+    }
+
+    pub(crate) fn popout_window(&self) -> Option<gpui::AnyWindowHandle> {
+        self.popout_window
+    }
+
+    pub(crate) fn set_popout_window(
+        &mut self,
+        window: Option<gpui::AnyWindowHandle>,
+        cx: &mut Context<Self>,
+    ) {
+        self.popout_window = window;
+        cx.notify();
+    }
+
+    /// While the panel is popped out into its own window, panel focus
+    /// actions should surface that window rather than opening the dock,
+    /// which only shows a placeholder.
+    fn activate_popout_window(workspace: &Workspace, cx: &mut App) -> bool {
+        let Some(popout_window) = workspace
+            .panel::<Self>(cx)
+            .and_then(|panel| panel.read(cx).popout_window)
+        else {
+            return false;
+        };
+        popout_window
+            .update(cx, |_, window, _| window.activate_window())
+            .ok();
+        true
     }
 
     pub fn toggle_focus(
@@ -1605,6 +1636,9 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) {
+        if Self::activate_popout_window(workspace, cx) {
+            return;
+        }
         if workspace
             .panel::<Self>(cx)
             .is_some_and(|panel| panel.read(cx).enabled(cx))
@@ -1619,6 +1653,9 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) {
+        if Self::activate_popout_window(workspace, cx) {
+            return;
+        }
         if workspace
             .panel::<Self>(cx)
             .is_some_and(|panel| panel.read(cx).enabled(cx))
@@ -1633,6 +1670,9 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) {
+        if Self::activate_popout_window(workspace, cx) {
+            return;
+        }
         if workspace
             .panel::<Self>(cx)
             .is_some_and(|panel| panel.read(cx).enabled(cx))
@@ -5771,6 +5811,38 @@ impl AgentPanel {
         })
     }
 
+    fn render_popped_out_placeholder(
+        &self,
+        popout_window: gpui::AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        v_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .bg(cx.theme().colors().panel_background)
+            .child(Label::new("The agent panel is open in a separate window.").color(Color::Muted))
+            .child(
+                Button::new("focus-agent-panel-window", "Focus Window").on_click(cx.listener(
+                    move |_, _, _, cx| {
+                        popout_window
+                            .update(cx, |_, window, _| window.activate_window())
+                            .ok();
+                    },
+                )),
+            )
+            .child(
+                Button::new("return-agent-panel-to-dock", "Move Back Into This Window").on_click(
+                    cx.listener(move |_, _, _, cx| {
+                        popout_window
+                            .update(cx, |_, window, _| window.remove_window())
+                            .ok();
+                    }),
+                ),
+            )
+    }
+
     fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let agent_server_store = self.project.read(cx).agent_server_store().clone();
 
@@ -6434,6 +6506,14 @@ impl Render for AgentPanel {
         // - Font size works as expected and can be changed with cmd-+/cmd-
         // - Scrolling in all views works as expected
         // - Files can be dropped into the panel
+        if let Some(popout_window) = self.popout_window
+            && window.window_handle() != popout_window
+        {
+            return self
+                .render_popped_out_placeholder(popout_window, cx)
+                .into_any_element();
+        }
+
         let content = v_flex()
             .key_context(self.key_context())
             .relative()
