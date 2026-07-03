@@ -3,6 +3,7 @@ pub mod agent_connection_store;
 mod agent_diff;
 mod agent_model_selector;
 mod agent_panel;
+mod agent_panel_window;
 mod agent_registry_ui;
 mod buffer_codegen;
 mod completion_provider;
@@ -324,6 +325,8 @@ actions!(
         ToggleSearch,
         /// Import agent threads from other Zed release channels (e.g. Preview, Nightly).
         ImportThreadsFromOtherChannels,
+        /// Opens the agent panel in a separate window.
+        OpenPanelInNewWindow,
         /// Starts a new terminal thread.
         NewTerminalThread,
     ]

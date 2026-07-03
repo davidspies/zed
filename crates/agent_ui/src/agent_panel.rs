@@ -36,6 +36,7 @@ use zed_actions::{
 
 use crate::ExpandMessageEditor;
 use crate::ManageProfiles;
+use crate::OpenPanelInNewWindow;
 use crate::agent_connection_store::AgentConnectionStore;
 use crate::completion_provider::{AgentContextSelection, AgentContextSource};
 use crate::terminal_thread_metadata_store::{
@@ -436,6 +437,9 @@ pub fn init(cx: &mut App) {
                         workspace.focus_panel::<AgentPanel>(window, cx);
                         panel.update(cx, |panel, cx| panel.manage_skills(action, window, cx));
                     }
+                })
+                .register_action(|workspace, _: &OpenPanelInNewWindow, window, cx| {
+                    crate::agent_panel_window::open_agent_panel_window(workspace, window, cx);
                 })
                 .register_action(|workspace, _: &OpenGlobalAgentsMdRules, window, cx| {
                     open_global_rules(workspace, window, cx);
@@ -5603,6 +5607,10 @@ impl AgentPanel {
             .with_handle(self.agent_panel_menu_handle.clone())
             .menu({
                 move |window, cx| {
+                    let in_workspace_window = window
+                        .window_handle()
+                        .downcast::<MultiWorkspace>()
+                        .is_some();
                     Some(ContextMenu::build(window, cx, |mut menu, _window, cx| {
                         menu = menu.context(menu_action_context.clone());
 
@@ -5732,6 +5740,11 @@ impl AgentPanel {
                             .action("Settings", Box::new(OpenSettings))
                             .separator()
                             .action("Toggle Threads Sidebar", Box::new(ToggleWorkspaceSidebar));
+
+                        if in_workspace_window {
+                            menu = menu
+                                .action("Open Panel in New Window", Box::new(OpenPanelInNewWindow));
+                        }
 
                         if has_auth_methods || supports_logout {
                             menu = menu.separator()
