@@ -8,7 +8,7 @@ use crate::{
 use anyhow::{Context as _, Result};
 use buffer_diff::DiffHunkSecondaryStatus;
 use editor::{
-    Editor, EditorEvent, SplittableEditor, UncommittedDiffHunkDelegate,
+    Editor, EditorEvent, PopOutSplitDiff, SplittableEditor, UncommittedDiffHunkDelegate,
     actions::{GoToHunk, GoToPreviousHunk, SendReviewToAgent},
 };
 use git::{Commit, StageAll, StageAndNext, ToggleStaged, UnstageAll, UnstageAndNext};
@@ -860,6 +860,18 @@ impl Render for ProjectDiffToolbar {
                                 this.dispatch_action(&GoToHunk, window, cx)
                             })),
                     ),
+            )
+            .child(
+                IconButton::new("pop-out-split-diff", IconName::ArrowUpRight)
+                    .icon_size(IconSize::Small)
+                    .tooltip(Tooltip::for_action_title_in(
+                        "Open Old Version in Separate Window",
+                        &PopOutSplitDiff,
+                        &focus_handle,
+                    ))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.dispatch_action(&PopOutSplitDiff, window, cx)
+                    })),
             )
             .child(Divider::vertical())
             .child(
