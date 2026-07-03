@@ -5726,6 +5726,10 @@ impl AgentPanel {
                 })
                 .unwrap_or_default();
 
+            // Act on the panel that rendered this menu rather than looking it
+            // up through the workspace's dock: when the panel is popped out
+            // into its own window, the dock lookup finds the wrong panel.
+            let panel = cx.entity().downgrade();
             let focus_handle = focus_handle.clone();
             let agent_server_store = agent_server_store;
 
@@ -5741,25 +5745,19 @@ impl AgentPanel {
                                 .icon(IconName::ZedAgent)
                                 .icon_color(Color::Muted)
                                 .handler({
-                                    let workspace = workspace.clone();
+                                    let panel = panel.clone();
                                     move |window, cx| {
-                                        if let Some(workspace) = workspace.upgrade() {
-                                            workspace.update(cx, |workspace, cx| {
-                                                if let Some(panel) =
-                                                    workspace.panel::<AgentPanel>(cx)
-                                                {
-                                                    panel.update(cx, |panel, cx| {
-                                                        panel.selected_agent = Agent::NativeAgent;
-                                                        panel.activate_new_thread(
-                                                            true,
-                                                            AgentThreadSource::AgentPanel,
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    });
-                                                }
-                                            });
-                                        }
+                                        panel
+                                            .update(cx, |panel, cx| {
+                                                panel.selected_agent = Agent::NativeAgent;
+                                                panel.activate_new_thread(
+                                                    true,
+                                                    AgentThreadSource::AgentPanel,
+                                                    window,
+                                                    cx,
+                                                );
+                                            })
+                                            .ok();
                                     }
                                 }),
                         )
@@ -5773,22 +5771,21 @@ impl AgentPanel {
                                     .icon(IconName::Terminal)
                                     .icon_color(Color::Muted)
                                     .handler({
+                                        let panel = panel.clone();
                                         let workspace = workspace.clone();
                                         move |window, cx| {
                                             if let Some(workspace) = workspace.upgrade() {
                                                 workspace.update(cx, |workspace, cx| {
-                                                    if let Some(panel) =
-                                                        workspace.panel::<AgentPanel>(cx)
-                                                    {
-                                                        panel.update(cx, |panel, cx| {
+                                                    panel
+                                                        .update(cx, |panel, cx| {
                                                             panel.new_terminal(
                                                                 Some(workspace),
                                                                 AgentThreadSource::AgentPanel,
                                                                 window,
                                                                 cx,
                                                             );
-                                                        });
-                                                    }
+                                                        })
+                                                        .ok();
                                                 });
                                             }
                                         }
@@ -5856,26 +5853,20 @@ impl AgentPanel {
                                     .icon_color(Color::Muted)
                                     .disabled(is_via_collab)
                                     .handler({
-                                        let workspace = workspace.clone();
+                                        let panel = panel.clone();
                                         let agent_id = item.id.clone();
                                         move |window, cx| {
-                                            if let Some(workspace) = workspace.upgrade() {
-                                                workspace.update(cx, |workspace, cx| {
-                                                    if let Some(panel) =
-                                                        workspace.panel::<AgentPanel>(cx)
-                                                    {
-                                                        panel.update(cx, |panel, cx| {
-                                                            panel.new_external_agent_thread(
-                                                                &NewExternalAgentThread {
-                                                                    agent: agent_id.clone(),
-                                                                },
-                                                                window,
-                                                                cx,
-                                                            );
-                                                        });
-                                                    }
-                                                });
-                                            }
+                                            panel
+                                                .update(cx, |panel, cx| {
+                                                    panel.new_external_agent_thread(
+                                                        &NewExternalAgentThread {
+                                                            agent: agent_id.clone(),
+                                                        },
+                                                        window,
+                                                        cx,
+                                                    );
+                                                })
+                                                .ok();
                                         }
                                     });
 
@@ -6378,6 +6369,16 @@ impl Render for AgentPanel {
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
                 this.open_configuration(window, cx);
             }))
+            .on_action(
+                cx.listener(|this, action: &NewExternalAgentThread, window, cx| {
+                    this.new_external_agent_thread(action, window, cx);
+                }),
+            )
+            .on_action(cx.listener(
+                |this, action: &NewNativeAgentThreadFromSummary, window, cx| {
+                    this.new_native_agent_thread_from_summary(action, window, cx);
+                },
+            ))
             .on_action(cx.listener(Self::open_active_thread_as_markdown))
             .on_action(cx.listener(Self::manage_skills))
             .on_action(cx.listener(Self::toggle_options_menu))
