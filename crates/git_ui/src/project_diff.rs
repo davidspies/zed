@@ -8,7 +8,8 @@ use anyhow::{Context as _, Result, anyhow};
 use buffer_diff::{BufferDiff, DiffHunkSecondaryStatus};
 use collections::HashMap;
 use editor::{
-    Addon, Editor, EditorEvent, EditorSettings, SelectionEffects, SplittableEditor,
+    Addon, Editor, EditorEvent, EditorSettings, PopOutSplitDiff, SelectionEffects,
+    SplittableEditor,
     actions::{GoToHunk, GoToPreviousHunk, SendReviewToAgent},
     multibuffer_context_lines,
     scroll::Autoscroll,
@@ -1824,6 +1825,18 @@ impl Render for ProjectDiffToolbar {
                             .disabled(!button_states.prev_next)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.dispatch_action(&GoToHunk, window, cx)
+                            })),
+                    )
+                    .child(
+                        IconButton::new("pop-out-split-diff", IconName::ArrowUpRight)
+                            .shape(ui::IconButtonShape::Square)
+                            .tooltip(Tooltip::for_action_title_in(
+                                "Open Old Version in Separate Window",
+                                &PopOutSplitDiff,
+                                &focus_handle,
+                            ))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.dispatch_action(&PopOutSplitDiff, window, cx)
                             })),
                     ),
             )

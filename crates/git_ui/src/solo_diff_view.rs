@@ -2,7 +2,8 @@ use crate::{git_panel::GitStatusEntry, git_status_icon};
 use anyhow::{Context as _, Result};
 use buffer_diff::DiffHunkSecondaryStatus;
 use editor::{
-    Direction, Editor, EditorEvent, EditorSettings, SplittableEditor, ToggleSplitDiff,
+    Direction, Editor, EditorEvent, EditorSettings, PopOutSplitDiff, SplittableEditor,
+    ToggleSplitDiff,
     actions::{GoToHunk, GoToPreviousHunk},
 };
 use fs::Fs;
@@ -671,6 +672,21 @@ impl Render for SoloDiffStyleToolbar {
                     .tooltip(Tooltip::text("Split"))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.set_diff_view_style(DiffViewStyle::Split, window, cx);
+                    })),
+            )
+            .child(
+                IconButton::new("solo-diff-pop-out", IconName::ArrowUpRight)
+                    .icon_size(IconSize::Small)
+                    .toggle_state(editor.lhs_popout_window().is_some())
+                    .tooltip(Tooltip::text("Open Old Version in Separate Window"))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let Some(solo_diff) = this.solo_diff() else {
+                            return;
+                        };
+                        let editor = solo_diff.read(cx).editor.clone();
+                        editor.update(cx, |editor, cx| {
+                            editor.pop_out_split_diff(&PopOutSplitDiff, window, cx);
+                        });
                     })),
             )
             .child(vertical_divider())
