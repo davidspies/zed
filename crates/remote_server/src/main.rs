@@ -1,5 +1,6 @@
 use clap::Parser;
 use remote_server::Commands;
+use std::ffi::OsStr;
 use std::io::Write as _;
 use std::path::PathBuf;
 
@@ -21,7 +22,26 @@ struct Cli {
     printenv: bool,
 }
 
+#[derive(Parser)]
+struct RemoteCli {
+    /// Wait for all of the given paths to be opened/closed before exiting.
+    #[arg(short, long)]
+    wait: bool,
+    /// The paths to open in Zed.
+    paths: Vec<String>,
+}
+
 fn main() -> anyhow::Result<()> {
+    let invoked_as_zed = std::env::args_os()
+        .next()
+        .and_then(|path| PathBuf::from(path).file_name().map(OsStr::to_owned))
+        .is_some_and(|file_name| file_name == "zed");
+
+    if invoked_as_zed {
+        let cli = RemoteCli::parse();
+        return remote_server::run_cli(cli.wait, cli.paths);
+    }
+
     let cli = Cli::parse();
 
     if let Some(socket_path) = &cli.askpass {

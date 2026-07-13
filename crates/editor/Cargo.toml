@@ -64,12 +64,14 @@ menu.workspace = true
 multi_buffer.workspace = true
 ordered-float.workspace = true
 parking_lot.workspace = true
+platform_title_bar.workspace = true
 pretty_assertions.workspace = true
 project.workspace = true
 proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
 rand.workspace = true
 regex.workspace = true
+release_channel.workspace = true
 rpc.workspace = true
 rope.workspace = true
 schemars.workspace = true

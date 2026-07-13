@@ -489,7 +489,9 @@ message Envelope {
     GitWorktreeCreatedAtResponse git_worktree_created_at_response = 458;
     TelemetryEvent telemetry_event = 459;
     ResolveCodeAction resolve_code_action = 460;
-    ResolveCodeActionResponse resolve_code_action_response = 461; // current max
+    ResolveCodeActionResponse resolve_code_action_response = 461;
+    OpenRemoteCliPaths open_remote_cli_paths = 462;
+    OpenRemoteCliPathsResponse open_remote_cli_paths_response = 463; // current max
   }
 
   reserved 87 to 88;
@@ -567,6 +569,16 @@ message FlushBufferedMessages {}
 message FlushBufferedMessagesResponse {}
 
 message RemoteStarted {}
+
+message OpenRemoteCliPaths {
+  repeated string paths = 1;
+  bool wait = 2;
+}
+
+message OpenRemoteCliPathsResponse {
+  int32 status = 1;
+  string stderr = 2;
+}
 
 message SpawnKernel {
   string kernel_name = 1;
