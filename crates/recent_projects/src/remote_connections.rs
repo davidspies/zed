@@ -1,26 +1,27 @@
 use std::{
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use anyhow::{Context as _, Result};
 use askpass::EncryptedPassword;
 use editor::Editor;
 use extension_host::ExtensionStore;
-use futures::{FutureExt as _, channel::oneshot, select};
-use gpui::{AppContext, AsyncApp, PromptLevel, WindowHandle};
+use futures::{FutureExt as _, channel::oneshot, future, select};
+use gpui::{AppContext, AsyncApp, PromptLevel, Subscription, WindowHandle};
 
 use project::trusted_worktrees;
 use remote::{
     DockerConnectionOptions, Interactive, RemoteConnection, RemoteConnectionOptions,
     SshConnectionOptions,
 };
+use rpc::{AnyProtoClient, TypedEnvelope, proto};
 pub use settings::SshConnection;
 use settings::{DevContainerConnection, ExtendingVec, RegisterSetting, Settings, WslConnection};
 use util::paths::PathWithPosition;
 use workspace::{
     AppState, MultiWorkspace, OpenOptions, SerializedWorkspaceLocation, Workspace,
-    find_existing_workspace,
+    WorkspaceMatching, find_existing_workspace,
 };
 
 pub use remote_connection::{
@@ -191,7 +192,16 @@ pub async fn open_remote_project(
                 .into_iter()
                 .map(|r| r.and_then(|r| r.ok()))
                 .collect::<Vec<_>>();
-            navigate_to_positions(&existing_window, items, &paths_with_positions, cx);
+            navigate_to_positions(
+                &existing_window,
+                items
+                    .iter()
+                    .map(|item| item.as_ref().map(|item| item.boxed_clone())),
+                &paths_with_positions,
+                cx,
+            );
+
+            wait_for_remote_open(open_options.wait, existing_window, &items, cx).await;
 
             return Ok(existing_window);
         }
@@ -413,7 +423,15 @@ pub async fn open_remote_project(
             }
 
             Ok(items) => {
-                navigate_to_positions(&window, items, &paths_with_positions, cx);
+                navigate_to_positions(
+                    &window,
+                    items
+                        .iter()
+                        .map(|item| item.as_ref().map(|item| item.boxed_clone())),
+                    &paths_with_positions,
+                    cx,
+                );
+                wait_for_remote_open(open_options.wait, window, &items, cx).await;
             }
         }
 
@@ -428,6 +446,16 @@ pub async fn open_remote_project(
             let workspace = multi_workspace.workspace().clone();
             workspace.update(cx, |workspace, cx| {
                 if let Some(client) = workspace.project().read(cx).remote_client() {
+                    let proto_client = client.read(cx).proto_client();
+                    if !proto_client.has_message_handler::<proto::OpenRemoteCliPaths>() {
+                        register_remote_cli_handler(
+                            proto_client,
+                            client.downgrade(),
+                            app_state.clone(),
+                            workspace.project().read(cx).remote_connection_options(cx),
+                        );
+                    }
+
                     if let Some(extension_store) = ExtensionStore::try_global(cx) {
                         extension_store
                             .update(cx, |store, cx| store.register_remote_client(client, cx));
@@ -437,6 +465,126 @@ pub async fn open_remote_project(
         })
         .ok();
     Ok(window)
+}
+
+fn register_remote_cli_handler(
+    proto_client: AnyProtoClient,
+    client: gpui::WeakEntity<remote::RemoteClient>,
+    app_state: Arc<AppState>,
+    connection_options: Option<RemoteConnectionOptions>,
+) {
+    let Some(connection_options) = connection_options else {
+        return;
+    };
+    proto_client.add_request_handler(
+        client,
+        move |_, envelope: TypedEnvelope<proto::OpenRemoteCliPaths>, mut cx| {
+            let app_state = app_state.clone();
+            let connection_options = connection_options.clone();
+            async move {
+                let open_options = OpenOptions {
+                    wait: envelope.payload.wait,
+                    workspace_matching: WorkspaceMatching::MatchSubdirectory,
+                    ..Default::default()
+                };
+                let paths = envelope
+                    .payload
+                    .paths
+                    .into_iter()
+                    .map(PathBuf::from)
+                    .collect();
+                match open_remote_project(
+                    connection_options,
+                    paths,
+                    app_state,
+                    open_options,
+                    &mut cx,
+                )
+                .await
+                {
+                    Ok(_) => Ok(proto::OpenRemoteCliPathsResponse {
+                        status: 0,
+                        stderr: String::new(),
+                    }),
+                    Err(error) => Ok(proto::OpenRemoteCliPathsResponse {
+                        status: 1,
+                        stderr: format!("{error:#}"),
+                    }),
+                }
+            }
+        },
+    );
+}
+
+async fn wait_for_remote_open(
+    wait: bool,
+    window: WindowHandle<MultiWorkspace>,
+    items: &[Option<Box<dyn workspace::item::ItemHandle>>],
+    cx: &mut AsyncApp,
+) {
+    if !wait {
+        return;
+    }
+
+    let mut release_futures = Vec::new();
+    let mut subscriptions: Vec<Subscription> = Vec::new();
+
+    for item in items.iter().flatten() {
+        let (release_tx, release_rx) = oneshot::channel();
+        let item_id = item.item_id();
+        let release_tx = Arc::new(Mutex::new(Some(release_tx)));
+        let pane_release_tx = release_tx.clone();
+        if let Ok(Some(subscription)) = window.update(cx, |multi_workspace, _, cx| {
+            let pane = multi_workspace
+                .workspace()
+                .read(cx)
+                .pane_for_item_id(item_id)?;
+            Some(cx.subscribe(&pane, move |_, _, event, _| {
+                if let workspace::pane::Event::RemovedItem { item } = event
+                    && item.item_id() == item_id
+                    && let Ok(mut release_tx) = pane_release_tx.lock()
+                    && let Some(release_tx) = release_tx.take()
+                {
+                    release_tx.send(()).ok();
+                }
+            }))
+        }) {
+            subscriptions.push(subscription);
+            release_futures.push(release_rx);
+        } else if let Ok(subscription) = window.update(cx, |_, window, cx| {
+            let _ = window;
+            item.on_release(
+                cx,
+                Box::new(move |_| {
+                    if let Ok(mut release_tx) = release_tx.lock()
+                        && let Some(release_tx) = release_tx.take()
+                    {
+                        release_tx.send(()).ok();
+                    }
+                }),
+            )
+        }) {
+            subscriptions.push(subscription);
+            release_futures.push(release_rx);
+        }
+    }
+
+    if release_futures.is_empty() {
+        let (release_tx, release_rx) = oneshot::channel();
+        if let Ok(subscription) = window.update(cx, |multi_workspace, _, cx| {
+            multi_workspace.workspace().update(cx, |_, cx| {
+                cx.on_release(move |_, _| {
+                    release_tx.send(()).ok();
+                })
+            })
+        }) {
+            subscriptions.push(subscription);
+            release_futures.push(release_rx);
+        }
+    }
+
+    let _subscriptions = subscriptions;
+    let _ = future::try_join_all(release_futures).await;
 }
 
 pub fn navigate_to_positions(
