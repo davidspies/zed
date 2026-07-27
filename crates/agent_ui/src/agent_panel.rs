@@ -36,6 +36,7 @@ use zed_actions::{
 
 use crate::ExpandMessageEditor;
 use crate::ManageProfiles;
+use crate::OpenPanelInNewWindow;
 use crate::agent_connection_store::AgentConnectionStore;
 use crate::completion_provider::{AgentContextSelection, AgentContextSource};
 use crate::terminal_thread_metadata_store::{
@@ -436,6 +437,9 @@ pub fn init(cx: &mut App) {
                         workspace.focus_panel::<AgentPanel>(window, cx);
                         panel.update(cx, |panel, cx| panel.manage_skills(action, window, cx));
                     }
+                })
+                .register_action(|workspace, _: &OpenPanelInNewWindow, window, cx| {
+                    crate::agent_panel_window::open_agent_panel_window(workspace, window, cx);
                 })
                 .register_action(|workspace, _: &OpenGlobalAgentsMdRules, window, cx| {
                     open_global_rules(workspace, window, cx);
@@ -1186,6 +1190,7 @@ pub struct AgentPanel {
     last_context_source: Option<AgentContextSource>,
 
     is_active: bool,
+    popout_window: Option<gpui::AnyWindowHandle>,
 }
 
 impl AgentPanel {
@@ -1589,10 +1594,40 @@ impl AgentPanel {
             _thread_metadata_store_subscription,
             last_context_source: None,
             is_active: false,
+            popout_window: None,
         };
 
         panel.ensure_native_agent_connection(cx);
         panel
+    }
+
+    pub(crate) fn popout_window(&self) -> Option<gpui::AnyWindowHandle> {
+        self.popout_window
+    }
+
+    pub(crate) fn set_popout_window(
+        &mut self,
+        window: Option<gpui::AnyWindowHandle>,
+        cx: &mut Context<Self>,
+    ) {
+        self.popout_window = window;
+        cx.notify();
+    }
+
+    /// While the panel is popped out into its own window, panel focus
+    /// actions should surface that window rather than opening the dock,
+    /// which only shows a placeholder.
+    fn activate_popout_window(workspace: &Workspace, cx: &mut App) -> bool {
+        let Some(popout_window) = workspace
+            .panel::<Self>(cx)
+            .and_then(|panel| panel.read(cx).popout_window)
+        else {
+            return false;
+        };
+        popout_window
+            .update(cx, |_, window, _| window.activate_window())
+            .ok();
+        true
     }
 
     pub fn toggle_focus(
@@ -1601,6 +1636,9 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) {
+        if Self::activate_popout_window(workspace, cx) {
+            return;
+        }
         if workspace
             .panel::<Self>(cx)
             .is_some_and(|panel| panel.read(cx).enabled(cx))
@@ -1615,6 +1653,9 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) {
+        if Self::activate_popout_window(workspace, cx) {
+            return;
+        }
         if workspace
             .panel::<Self>(cx)
             .is_some_and(|panel| panel.read(cx).enabled(cx))
@@ -1629,6 +1670,9 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) {
+        if Self::activate_popout_window(workspace, cx) {
+            return;
+        }
         if workspace
             .panel::<Self>(cx)
             .is_some_and(|panel| panel.read(cx).enabled(cx))
@@ -5603,6 +5647,10 @@ impl AgentPanel {
             .with_handle(self.agent_panel_menu_handle.clone())
             .menu({
                 move |window, cx| {
+                    let in_workspace_window = window
+                        .window_handle()
+                        .downcast::<MultiWorkspace>()
+                        .is_some();
                     Some(ContextMenu::build(window, cx, |mut menu, _window, cx| {
                         menu = menu.context(menu_action_context.clone());
 
@@ -5733,6 +5781,11 @@ impl AgentPanel {
                             .separator()
                             .action("Toggle Threads Sidebar", Box::new(ToggleWorkspaceSidebar));
 
+                        if in_workspace_window {
+                            menu = menu
+                                .action("Open Panel in New Window", Box::new(OpenPanelInNewWindow));
+                        }
+
                         if has_auth_methods || supports_logout {
                             menu = menu.separator()
                         }
@@ -5765,6 +5818,38 @@ impl AgentPanel {
             telemetry::event!("Agent Panel Clone Repo Clicked");
             window.dispatch_action(git::Clone.boxed_clone(), cx);
         })
+    }
+
+    fn render_popped_out_placeholder(
+        &self,
+        popout_window: gpui::AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        v_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .bg(cx.theme().colors().panel_background)
+            .child(Label::new("The agent panel is open in a separate window.").color(Color::Muted))
+            .child(
+                Button::new("focus-agent-panel-window", "Focus Window").on_click(cx.listener(
+                    move |_, _, _, cx| {
+                        popout_window
+                            .update(cx, |_, window, _| window.activate_window())
+                            .ok();
+                    },
+                )),
+            )
+            .child(
+                Button::new("return-agent-panel-to-dock", "Move Back Into This Window").on_click(
+                    cx.listener(move |_, _, _, cx| {
+                        popout_window
+                            .update(cx, |_, window, _| window.remove_window())
+                            .ok();
+                    }),
+                ),
+            )
     }
 
     fn render_toolbar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -5803,6 +5888,10 @@ impl AgentPanel {
                 })
                 .unwrap_or_default();
 
+            // Act on the panel that rendered this menu rather than looking it
+            // up through the workspace's dock: when the panel is popped out
+            // into its own window, the dock lookup finds the wrong panel.
+            let panel = cx.entity().downgrade();
             let focus_handle = focus_handle.clone();
             let agent_server_store = agent_server_store;
 
@@ -5818,25 +5907,19 @@ impl AgentPanel {
                                 .icon(IconName::ZedAgent)
                                 .icon_color(Color::Muted)
                                 .handler({
-                                    let workspace = workspace.clone();
+                                    let panel = panel.clone();
                                     move |window, cx| {
-                                        if let Some(workspace) = workspace.upgrade() {
-                                            workspace.update(cx, |workspace, cx| {
-                                                if let Some(panel) =
-                                                    workspace.panel::<AgentPanel>(cx)
-                                                {
-                                                    panel.update(cx, |panel, cx| {
-                                                        panel.selected_agent = Agent::NativeAgent;
-                                                        panel.activate_new_thread(
-                                                            true,
-                                                            AgentThreadSource::AgentPanel,
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    });
-                                                }
-                                            });
-                                        }
+                                        panel
+                                            .update(cx, |panel, cx| {
+                                                panel.selected_agent = Agent::NativeAgent;
+                                                panel.activate_new_thread(
+                                                    true,
+                                                    AgentThreadSource::AgentPanel,
+                                                    window,
+                                                    cx,
+                                                );
+                                            })
+                                            .ok();
                                     }
                                 }),
                         )
@@ -5850,22 +5933,21 @@ impl AgentPanel {
                                     .icon(IconName::Terminal)
                                     .icon_color(Color::Muted)
                                     .handler({
+                                        let panel = panel.clone();
                                         let workspace = workspace.clone();
                                         move |window, cx| {
                                             if let Some(workspace) = workspace.upgrade() {
                                                 workspace.update(cx, |workspace, cx| {
-                                                    if let Some(panel) =
-                                                        workspace.panel::<AgentPanel>(cx)
-                                                    {
-                                                        panel.update(cx, |panel, cx| {
+                                                    panel
+                                                        .update(cx, |panel, cx| {
                                                             panel.new_terminal(
                                                                 Some(workspace),
                                                                 AgentThreadSource::AgentPanel,
                                                                 window,
                                                                 cx,
                                                             );
-                                                        });
-                                                    }
+                                                        })
+                                                        .ok();
                                                 });
                                             }
                                         }
@@ -5933,26 +6015,20 @@ impl AgentPanel {
                                     .icon_color(Color::Muted)
                                     .disabled(is_via_collab)
                                     .handler({
-                                        let workspace = workspace.clone();
+                                        let panel = panel.clone();
                                         let agent_id = item.id.clone();
                                         move |window, cx| {
-                                            if let Some(workspace) = workspace.upgrade() {
-                                                workspace.update(cx, |workspace, cx| {
-                                                    if let Some(panel) =
-                                                        workspace.panel::<AgentPanel>(cx)
-                                                    {
-                                                        panel.update(cx, |panel, cx| {
-                                                            panel.new_external_agent_thread(
-                                                                &NewExternalAgentThread {
-                                                                    agent: agent_id.clone(),
-                                                                },
-                                                                window,
-                                                                cx,
-                                                            );
-                                                        });
-                                                    }
-                                                });
-                                            }
+                                            panel
+                                                .update(cx, |panel, cx| {
+                                                    panel.new_external_agent_thread(
+                                                        &NewExternalAgentThread {
+                                                            agent: agent_id.clone(),
+                                                        },
+                                                        window,
+                                                        cx,
+                                                    );
+                                                })
+                                                .ok();
                                         }
                                     });
 
@@ -6439,6 +6515,14 @@ impl Render for AgentPanel {
         // - Font size works as expected and can be changed with cmd-+/cmd-
         // - Scrolling in all views works as expected
         // - Files can be dropped into the panel
+        if let Some(popout_window) = self.popout_window
+            && window.window_handle() != popout_window
+        {
+            return self
+                .render_popped_out_placeholder(popout_window, cx)
+                .into_any_element();
+        }
+
         let content = v_flex()
             .key_context(self.key_context())
             .relative()
@@ -6455,6 +6539,16 @@ impl Render for AgentPanel {
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
                 this.open_configuration(window, cx);
             }))
+            .on_action(
+                cx.listener(|this, action: &NewExternalAgentThread, window, cx| {
+                    this.new_external_agent_thread(action, window, cx);
+                }),
+            )
+            .on_action(cx.listener(
+                |this, action: &NewNativeAgentThreadFromSummary, window, cx| {
+                    this.new_native_agent_thread_from_summary(action, window, cx);
+                },
+            ))
             .on_action(cx.listener(Self::open_active_thread_as_markdown))
             .on_action(cx.listener(Self::manage_skills))
             .on_action(cx.listener(Self::toggle_options_menu))
