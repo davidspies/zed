@@ -114,6 +114,7 @@ members = [
     "crates/json_schema_store",
     "crates/keymap_editor",
     "crates/language",
+    "crates/licenses",
     "crates/language_core",
     "crates/language_extension",
     "crates/language_model",
@@ -379,6 +380,7 @@ journal = { path = "crates/journal" }
 json_schema_store = { path = "crates/json_schema_store" }
 keymap_editor = { path = "crates/keymap_editor" }
 language = { path = "crates/language" }
+licenses = { path = "crates/licenses" }
 language_core = { path = "crates/language_core" }
 language_extension = { path = "crates/language_extension" }
 language_model = { path = "crates/language_model" }
@@ -1036,6 +1038,7 @@ journal = { codegen-units = 1 }
 json_schema_store = { codegen-units = 1 }
 llama_cpp = { codegen-units = 1 }
 lmstudio = { codegen-units = 1 }
+licenses = { codegen-units = 1 }
 menu = { codegen-units = 1 }
 notifications = { codegen-units = 1 }
 ollama = { codegen-units = 1 }
