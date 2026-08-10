@@ -11,7 +11,18 @@ fn main() {
     }
 
     // Populate git sha environment variable if git is available
-    println!("cargo:rerun-if-changed=../../.git/logs/HEAD");
+    // `.git` is a file rather than a directory in submodule and worktree checkouts, so the
+    // reflog has to be located rather than assumed; a path that doesn't exist would make cargo
+    // treat this build script as dirty on every build.
+    if let Some(output) = Command::new("git")
+        .args(["rev-parse", "--git-path", "logs/HEAD"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+    {
+        let reflog = String::from_utf8_lossy(&output.stdout);
+        println!("cargo:rerun-if-changed={}", reflog.trim());
+    }
     if let Some(output) = Command::new("git")
         .args(["rev-parse", "HEAD"])
         .output()
