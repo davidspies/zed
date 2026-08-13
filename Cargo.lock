@@ -5776,6 +5776,7 @@ dependencies = [
  "multi_buffer",
  "ordered-float 2.10.1",
  "parking_lot",
+ "platform_title_bar",
  "pretty_assertions",
  "project",
  "proptest",
@@ -10245,6 +10246,14 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "webrtc-sys",
+]
+
+[[package]]
+name = "licenses"
+version = "0.1.0"
+dependencies = [
+ "rust-embed",
+ "util",
 ]
 
 [[package]]
@@ -15139,6 +15148,7 @@ dependencies = [
  "remote",
  "remote_connection",
  "remote_server",
+ "rpc",
  "semver",
  "serde",
  "serde_json",
@@ -23348,6 +23358,7 @@ dependencies = [
  "language_selector",
  "language_tools",
  "languages",
+ "licenses",
  "line_ending_selector",
  "log",
  "lsp_locations",

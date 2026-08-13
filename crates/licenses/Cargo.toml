@@ -1,0 +1,16 @@
+[package]
+name = "licenses"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lib]
+path = "src/licenses.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+rust-embed.workspace = true
+util.workspace = true
