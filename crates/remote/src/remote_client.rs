@@ -132,6 +132,13 @@ pub enum Interactive {
     No,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemoteCliOnPath {
+    /// Start the command with the remote server's `zed` shim directory prepended to PATH.
+    Yes,
+    No,
+}
+
 pub trait RemoteClientDelegate: Send + Sync {
     fn ask_password(
         &self,
@@ -164,6 +171,7 @@ const INITIAL_CONNECTION_TIMEOUT: Duration =
     Duration::from_secs(if cfg!(debug_assertions) { 5 } else { 60 });
 
 pub const MAX_RECONNECT_ATTEMPTS: usize = 3;
+pub const REMOTE_SERVER_ID_ENV_VAR: &str = "ZED_REMOTE_SERVER_ID";
 
 enum State {
     Connecting,
@@ -962,11 +970,20 @@ impl RemoteClient {
         working_dir: Option<String>,
         port_forward: Option<(u16, String, u16)>,
         interactive: Interactive,
+        remote_cli: RemoteCliOnPath,
     ) -> Result<CommandTemplate> {
         let Some(connection) = self.remote_connection() else {
             return Err(anyhow!("no remote connection"));
         };
-        connection.build_command(program, args, env, working_dir, port_forward, interactive)
+        connection.build_command(
+            program,
+            args,
+            env,
+            working_dir,
+            port_forward,
+            interactive,
+            remote_cli,
+        )
     }
 
     pub fn build_forward_ports_command(
@@ -997,6 +1014,10 @@ impl RemoteClient {
 
     pub fn connection_options(&self) -> RemoteConnectionOptions {
         self.connection_options.clone()
+    }
+
+    pub fn server_identifier(&self) -> &str {
+        &self.unique_identifier
     }
 
     pub fn connection(&self) -> Option<Arc<dyn RemoteConnection>> {
@@ -1617,6 +1638,7 @@ pub trait RemoteConnection: Send + Sync {
         working_dir: Option<String>,
         port_forward: Option<(u16, String, u16)>,
         interactive: Interactive,
+        remote_cli: RemoteCliOnPath,
     ) -> Result<CommandTemplate>;
     fn build_forward_ports_command(
         &self,

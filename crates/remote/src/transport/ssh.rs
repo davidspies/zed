@@ -1,7 +1,9 @@
 use crate::{
     RemoteArch, RemoteClientDelegate, RemoteOs, RemotePlatform,
-    remote_client::{CommandTemplate, Interactive, RemoteConnection, RemoteConnectionOptions},
-    transport::{parse_platform, parse_shell},
+    remote_client::{
+        CommandTemplate, Interactive, RemoteCliOnPath, RemoteConnection, RemoteConnectionOptions,
+    },
+    transport::{parse_platform, parse_shell, with_remote_cli},
 };
 use anyhow::{Context as _, Result, anyhow};
 use async_trait::async_trait;
@@ -14,7 +16,7 @@ use futures::{
 use gpui::{App, AppContext as _, AsyncApp, Task};
 use parking_lot::Mutex;
 use paths::remote_server_dir_relative;
-use release_channel::{AppVersion, ReleaseChannel};
+use release_channel::{AppCommitSha, AppVersion, ReleaseChannel};
 use rpc::proto::Envelope;
 use semver::Version;
 pub use settings::SshPortForwardOption;
@@ -335,6 +337,7 @@ impl RemoteConnection for SshRemoteConnection {
         working_dir: Option<String>,
         port_forward: Option<(u16, String, u16)>,
         interactive: Interactive,
+        remote_cli: RemoteCliOnPath,
     ) -> Result<CommandTemplate> {
         let Self {
             ssh_path_style,
@@ -374,6 +377,7 @@ impl RemoteConnection for SshRemoteConnection {
                 socket.ssh_command_options(),
                 &socket.connection_options.ssh_destination(),
                 interactive,
+                remote_cli,
             )
         }
     }
@@ -835,9 +839,17 @@ impl SshRemoteConnection {
         version: Version,
         cx: &mut AsyncApp,
     ) -> Result<Arc<RelPath>> {
+        // Include the build commit in the cached binary name so that remotes
+        // provisioned from an older fork release re-download the server when
+        // a new build is published under the same version.
+        let commit_suffix = cx
+            .update(|cx| AppCommitSha::try_global(cx))
+            .map(|sha| format!("-{}", sha.short()))
+            .unwrap_or_default();
         let version_str = match release_channel {
             ReleaseChannel::Dev => "build".to_string(),
-            _ => version.to_string(),
+            ReleaseChannel::Nightly => version.to_string(),
+            _ => format!("{}{}", version, commit_suffix),
         };
         let binary_name = format!(
             "zed-remote-server-{}-{}{}",
@@ -1858,6 +1870,7 @@ fn build_command_posix(
     ssh_options: Vec<String>,
     ssh_destination: &str,
     interactive: Interactive,
+    remote_cli: RemoteCliOnPath,
 ) -> Result<CommandTemplate> {
     use std::fmt::Write as _;
 
@@ -1914,21 +1927,22 @@ fn build_command_posix(
         write!(exec, "{assignment} ")?;
     }
 
-    if let Some(input_program) = input_program {
-        write!(
-            exec,
-            "{}",
-            ssh_shell_kind
-                .try_quote_prefix_aware(&input_program)
-                .context("shell quoting")?
-        )?;
-        for arg in input_args {
-            let arg = ssh_shell_kind.try_quote(&arg).context("shell quoting")?;
-            write!(exec, " {arg}")?;
-        }
-    } else {
-        write!(exec, "{ssh_shell} -l")?;
+    let (program, args) = match input_program {
+        Some(program) => (program, input_args.to_vec()),
+        None => (ssh_shell.to_string(), vec!["-l".to_string()]),
     };
+    let (program, args) = with_remote_cli(remote_cli, program, args);
+    write!(
+        exec,
+        "{}",
+        ssh_shell_kind
+            .try_quote_prefix_aware(&program)
+            .context("shell quoting")?
+    )?;
+    for arg in &args {
+        let arg = ssh_shell_kind.try_quote(arg).context("shell quoting")?;
+        write!(exec, " {arg}")?;
+    }
 
     let mut args = Vec::new();
     args.extend(ssh_options);
@@ -2071,6 +2085,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_build_command_with_remote_cli_on_path() -> Result<()> {
+        let command = build_command_posix(
+            None,
+            &[],
+            &HashMap::default(),
+            Some("~/work".to_string()),
+            None,
+            HashMap::default(),
+            PathStyle::Unix,
+            "/bin/bash",
+            ShellKind::Posix,
+            vec![],
+            "user@host",
+            Interactive::Yes,
+            RemoteCliOnPath::Yes,
+        )?;
+        assert_eq!(
+            command.args.last().unwrap(),
+            "cd \"$HOME\"/work && exec env sh -c 'export PATH=\"$HOME/.zed_server/bin:$PATH\"; exec \"$@\"' sh /bin/bash -l"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_build_command() -> Result<()> {
         let mut input_env = HashMap::default();
         input_env.insert("INPUT_VA".to_string(), "val".to_string());
@@ -2091,6 +2129,7 @@ mod tests {
             vec!["-o".to_string(), "ControlMaster=auto".to_string()],
             "user@host",
             Interactive::No,
+            RemoteCliOnPath::No,
         )?;
         assert_eq!(command.program, "ssh");
         // Should contain -T for non-interactive
@@ -2111,6 +2150,7 @@ mod tests {
             vec!["-p".to_string(), "2222".to_string()],
             "user@host",
             Interactive::Yes,
+            RemoteCliOnPath::No,
         )?;
 
         assert_eq!(command.program, "ssh");
@@ -2146,6 +2186,7 @@ mod tests {
             vec!["-p".to_string(), "2222".to_string()],
             "user@host",
             Interactive::Yes,
+            RemoteCliOnPath::No,
         )?;
 
         assert_eq!(command.program, "ssh");
@@ -2186,6 +2227,7 @@ mod tests {
             vec![],
             "user@host",
             Interactive::No,
+            RemoteCliOnPath::No,
         )?;
 
         let remote_command = command
@@ -2393,6 +2435,7 @@ mod tests {
             vec![],
             "user@host",
             Interactive::No,
+            RemoteCliOnPath::No,
         )?;
 
         assert!(

@@ -1,14 +1,16 @@
 use crate::{
     RemoteArch, RemoteClientDelegate, RemoteOs, RemotePlatform,
-    remote_client::{CommandTemplate, Interactive, RemoteConnection, RemoteConnectionOptions},
-    transport::{parse_platform, parse_shell},
+    remote_client::{
+        CommandTemplate, Interactive, RemoteCliOnPath, RemoteConnection, RemoteConnectionOptions,
+    },
+    transport::{parse_platform, parse_shell, with_remote_cli},
 };
 use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use collections::HashMap;
 use futures::channel::mpsc::{Sender, UnboundedReceiver, UnboundedSender};
 use gpui::{App, AppContext as _, AsyncApp, Task};
-use release_channel::{AppVersion, ReleaseChannel};
+use release_channel::{AppCommitSha, AppVersion, ReleaseChannel};
 use rpc::proto::Envelope;
 use semver::Version;
 use smol::{
@@ -194,9 +196,17 @@ impl WslRemoteConnection {
         version: Version,
         cx: &mut AsyncApp,
     ) -> Result<Arc<RelPath>> {
+        // Include the build commit in the cached binary name so that remotes
+        // provisioned from an older fork release re-download the server when
+        // a new build is published under the same version.
+        let commit_suffix = cx
+            .update(|cx| AppCommitSha::try_global(cx))
+            .map(|sha| format!("-{}", sha.short()))
+            .unwrap_or_default();
         let version_str = match release_channel {
             ReleaseChannel::Dev => "build".to_string(),
-            _ => version.to_string(),
+            ReleaseChannel::Nightly => version.to_string(),
+            _ => format!("{}{}", version, commit_suffix),
         };
 
         let binary_name = format!(
@@ -531,6 +541,7 @@ impl RemoteConnection for WslRemoteConnection {
         working_dir: Option<String>,
         port_forward: Option<(u16, String, u16)>,
         _interactive: Interactive,
+        remote_cli: RemoteCliOnPath,
     ) -> Result<CommandTemplate> {
         if port_forward.is_some() {
             bail!("WSL shares the network interface with the host system");
@@ -549,20 +560,21 @@ impl RemoteConnection for WslRemoteConnection {
             write!(exec, "{assignment} ")?;
         }
 
-        if let Some(program) = program {
-            write!(
-                exec,
-                "{}",
-                shell_kind
-                    .try_quote_prefix_aware(&program)
-                    .context("shell quoting")?
-            )?;
-            for arg in args {
-                let arg = shell_kind.try_quote(&arg).context("shell quoting")?;
-                write!(exec, " {arg}")?;
-            }
-        } else {
-            write!(&mut exec, "{} -l", self.shell)?;
+        let (program, args) = match program {
+            Some(program) => (program, args.to_vec()),
+            None => (self.shell.clone(), vec!["-l".to_string()]),
+        };
+        let (program, args) = with_remote_cli(remote_cli, program, args);
+        write!(
+            exec,
+            "{}",
+            shell_kind
+                .try_quote_prefix_aware(&program)
+                .context("shell quoting")?
+        )?;
+        for arg in &args {
+            let arg = shell_kind.try_quote(arg).context("shell quoting")?;
+            write!(exec, " {arg}")?;
         }
         let (command, args) =
             ShellBuilder::new(&Shell::Program(self.shell.clone()), false).build(Some(exec), &[]);

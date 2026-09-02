@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use crate::{
-    RemoteArch, RemoteOs, RemotePlatform,
+    RemoteArch, RemoteCliOnPath, RemoteOs, RemotePlatform,
     json_log::LogRecord,
     protocol::{MESSAGE_LEN_SIZE, message_len_from_buffer, read_message_with_len, write_message},
 };
@@ -11,6 +11,7 @@ use futures::{
     channel::mpsc::{Sender, UnboundedReceiver, UnboundedSender},
 };
 use gpui::{AppContext as _, AsyncApp, Task};
+use paths::remote_server_dir_relative;
 use rpc::proto::Envelope;
 use util::command::Child;
 
@@ -19,6 +20,26 @@ pub mod docker;
 pub mod mock;
 pub mod ssh;
 pub mod wsl;
+
+/// Everything variable travels as argv; only the constant shim path appears in the script.
+fn with_remote_cli(
+    remote_cli: RemoteCliOnPath,
+    program: String,
+    args: Vec<String>,
+) -> (String, Vec<String>) {
+    match remote_cli {
+        RemoteCliOnPath::No => (program, args),
+        RemoteCliOnPath::Yes => {
+            let script = format!(
+                r#"export PATH="$HOME/{}/bin:$PATH"; exec "$@""#,
+                remote_server_dir_relative().as_unix_str()
+            );
+            let mut wrapped_args = vec!["-c".to_string(), script, "sh".to_string(), program];
+            wrapped_args.extend(args);
+            ("sh".to_string(), wrapped_args)
+        }
+    }
+}
 
 /// Parses the output of `uname -sm` to determine the remote platform.
 /// Takes the last line to skip possible shell initialization output.

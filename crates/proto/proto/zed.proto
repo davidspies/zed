@@ -507,7 +507,9 @@ message Envelope {
     RefreshFoldingRanges refresh_folding_ranges = 476;
     RefreshDocumentSymbols refresh_document_symbols = 477;
     BlameBufferAtRevision blame_buffer_at_revision = 478;
-    BlameBufferAtRevisionResponse blame_buffer_at_revision_response = 479; // current max
+    BlameBufferAtRevisionResponse blame_buffer_at_revision_response = 479;
+    OpenRemoteCliPaths open_remote_cli_paths = 480;
+    OpenRemoteCliPathsResponse open_remote_cli_paths_response = 481; // current max
   }
 
   reserved 87 to 88;
@@ -585,6 +587,16 @@ message FlushBufferedMessages {}
 message FlushBufferedMessagesResponse {}
 
 message RemoteStarted {}
+
+message OpenRemoteCliPaths {
+  repeated string paths = 1;
+  bool wait = 2;
+}
+
+message OpenRemoteCliPathsResponse {
+  int32 status = 1;
+  string stderr = 2;
+}
 
 message SpawnKernel {
   string kernel_name = 1;

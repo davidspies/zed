@@ -6,7 +6,7 @@ use async_channel::bounded;
 use futures::{FutureExt, future::Shared};
 use itertools::Itertools as _;
 use language::LanguageName;
-use remote::{Interactive, RemoteClient};
+use remote::{Interactive, RemoteCliOnPath, RemoteClient};
 use settings::{Settings, SettingsLocation};
 use std::{
     borrow::Cow,
@@ -560,6 +560,7 @@ impl Project {
                             None,
                             None,
                             Interactive::Yes,
+                            RemoteCliOnPath::No,
                         )?;
                         let mut command = new_std_command(command_template.program);
                         command.args(command_template.args);
@@ -621,6 +622,10 @@ fn create_remote_shell(
     cx: &mut App,
 ) -> Result<(Shell, HashMap<String, String>)> {
     insert_zed_terminal_env(&mut env, &release_channel::AppVersion::global(cx));
+    env.insert(
+        remote::REMOTE_SERVER_ID_ENV_VAR.to_string(),
+        remote_client.read(cx).server_identifier().to_string(),
+    );
 
     let (program, args) = match spawn_command {
         Some((program, args)) => (Some(program.clone()), args),
@@ -634,6 +639,7 @@ fn create_remote_shell(
         working_directory.map(|path| path.display().to_string()),
         None,
         Interactive::Yes,
+        RemoteCliOnPath::Yes,
     )?;
 
     log::debug!("Connecting to a remote server: {:?}", command.program);

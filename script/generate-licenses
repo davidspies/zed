@@ -6,6 +6,12 @@ CARGO_ABOUT_VERSION="0.8.2"
 OUTPUT_FILE="${1:-$(pwd)/assets/licenses.md}"
 TEMPLATE_FILE="script/licenses/template.md.hbs"
 
+# The licenses file is an embedded compile input, so rewriting it with identical
+# content still forces a rebuild and a whole-program ThinLTO relink of the editor.
+# Generate into a staging file and only replace the real one when it differs.
+STAGED_FILE="$(mktemp)"
+trap 'rm -f "$STAGED_FILE" "${STAGED_FILE}.bak"' EXIT
+
 fail_on_stderr() {
     local tmpfile=$(mktemp)
     "$@" 2> >(tee "$tmpfile" >&2)
@@ -15,8 +21,6 @@ fail_on_stderr() {
     return $rc
 }
 
-echo -n "" >"$OUTPUT_FILE"
-
 {
     echo -e "# ###### THEME LICENSES ######\n"
     cat assets/themes/LICENSES
@@ -25,7 +29,7 @@ echo -n "" >"$OUTPUT_FILE"
     cat assets/icons/LICENSES
 
     echo -e "\n# ###### CODE LICENSES ######\n"
-} >>"$OUTPUT_FILE"
+} >"$STAGED_FILE"
 
 if ! cargo about --version | grep "cargo-about $CARGO_ABOUT_VERSION" &>/dev/null; then
     echo "Installing cargo-about@$CARGO_ABOUT_VERSION..."
@@ -41,16 +45,19 @@ set -x
 $WRAPPER cargo about generate \
     $FAIL_FLAG \
     -c script/licenses/zed-licenses.toml \
-    "$TEMPLATE_FILE" >>"$OUTPUT_FILE"
+    "$TEMPLATE_FILE" >>"$STAGED_FILE"
 set +x
 
-sed -i.bak 's/&quot;/"/g' "$OUTPUT_FILE"
-sed -i.bak 's/&#x27;/'\''/g' "$OUTPUT_FILE" # The ` '\'' ` thing ends the string, appends a single quote, and re-opens the string
-sed -i.bak 's/&#x3D;/=/g' "$OUTPUT_FILE"
-sed -i.bak 's/&#x60;/`/g' "$OUTPUT_FILE"
-sed -i.bak 's/&lt;/</g' "$OUTPUT_FILE"
-sed -i.bak 's/&gt;/>/g' "$OUTPUT_FILE"
+sed -i.bak 's/&quot;/"/g' "$STAGED_FILE"
+sed -i.bak 's/&#x27;/'\''/g' "$STAGED_FILE" # The ` '\'' ` thing ends the string, appends a single quote, and re-opens the string
+sed -i.bak 's/&#x3D;/=/g' "$STAGED_FILE"
+sed -i.bak 's/&#x60;/`/g' "$STAGED_FILE"
+sed -i.bak 's/&lt;/</g' "$STAGED_FILE"
+sed -i.bak 's/&gt;/>/g' "$STAGED_FILE"
 
-rm -rf "${OUTPUT_FILE}.bak"
-
-echo "generate-licenses completed. See $OUTPUT_FILE"
+if cmp -s "$STAGED_FILE" "$OUTPUT_FILE"; then
+    echo "generate-licenses completed. $OUTPUT_FILE is already up to date"
+else
+    cat "$STAGED_FILE" >"$OUTPUT_FILE"
+    echo "generate-licenses completed. See $OUTPUT_FILE"
+fi

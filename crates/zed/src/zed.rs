@@ -19,7 +19,6 @@ use agent_settings::{UserAgentsMdState, init_user_agents_md};
 use agent_ui::AgentDiffToolbar;
 use anyhow::Context as _;
 pub use app_menus::*;
-use assets::Assets;
 
 use breadcrumbs::Breadcrumbs;
 use client::zed_urls;
@@ -92,7 +91,7 @@ use theme_settings::{ThemeSettings, load_user_theme};
 use ui::{Navigable, NavigableEntry, PopoverMenuHandle, TintColor, prelude::*};
 use util::markdown::MarkdownString;
 use util::rel_path::RelPath;
-use util::{ResultExt, asset_str, maybe};
+use util::{ResultExt, maybe};
 use uuid::Uuid;
 use vim_mode_setting::VimModeSetting;
 use workspace::notifications::{NotificationId, dismiss_app_notification, show_app_notification};
@@ -240,7 +239,7 @@ pub fn init(cx: &mut App) {
         with_active_or_new_workspace(cx, |workspace, window, cx| {
             open_bundled_file(
                 workspace,
-                asset_str::<Assets>("licenses.md"),
+                licenses::open_source_licenses(),
                 "Open Source License Attribution",
                 "Markdown",
                 window,
