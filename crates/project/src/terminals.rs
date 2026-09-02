@@ -6,7 +6,7 @@ use async_channel::bounded;
 use futures::{FutureExt, future::Shared};
 use itertools::Itertools as _;
 use language::LanguageName;
-use remote::{Interactive, RemoteClient};
+use remote::{Interactive, RemoteCliOnPath, RemoteClient};
 use settings::{Settings, SettingsLocation};
 use std::{
     borrow::Cow,
@@ -384,7 +384,7 @@ impl Project {
             let mut env = env_task.await.unwrap_or_default();
             env.extend(settings.env);
 
-            let mut activation_script = maybe!(async {
+            let activation_script = maybe!(async {
                 for toolchain in toolchains {
                     let Some(toolchain) = toolchain.await else {
                         continue;
@@ -402,9 +402,6 @@ impl Project {
             })
             .await
             .unwrap_or_default();
-            if remote_client.is_some() {
-                prepend_remote_cli_path_activation(&mut activation_script, shell_kind);
-            }
 
             let builder = project
                 .update(cx, move |_, cx| {
@@ -563,6 +560,7 @@ impl Project {
                             None,
                             None,
                             Interactive::Yes,
+                            RemoteCliOnPath::No,
                         )?;
                         let mut command = new_std_command(command_template.program);
                         command.args(command_template.args);
@@ -641,6 +639,7 @@ fn create_remote_shell(
         working_directory.map(|path| path.display().to_string()),
         None,
         Interactive::Yes,
+        RemoteCliOnPath::Yes,
     )?;
 
     log::debug!("Connecting to a remote server: {:?}", command.program);
@@ -654,36 +653,6 @@ fn create_remote_shell(
         },
         command.env,
     ))
-}
-
-fn prepend_remote_cli_path_activation(activation_script: &mut Vec<String>, shell_kind: ShellKind) {
-    let Some(command) = remote_cli_path_activation(shell_kind) else {
-        return;
-    };
-    activation_script.insert(0, command);
-}
-
-fn remote_cli_path_activation(shell_kind: ShellKind) -> Option<String> {
-    let remote_cli_bin_dir =
-        paths::remote_server_dir_relative().join(RelPath::from_unix_str("bin").ok()?);
-    let remote_cli_bin_dir = remote_cli_bin_dir.as_unix_str();
-
-    match shell_kind {
-        ShellKind::Posix => Some(format!(r#"export PATH="$HOME"/{remote_cli_bin_dir}:$PATH"#)),
-        ShellKind::Fish => Some(format!(
-            r#"set -gx PATH "$HOME"/{remote_cli_bin_dir} $PATH"#
-        )),
-        ShellKind::Csh | ShellKind::Tcsh => {
-            Some(format!(r#"setenv PATH "$HOME"/{remote_cli_bin_dir}:$PATH"#))
-        }
-        ShellKind::PowerShell
-        | ShellKind::Pwsh
-        | ShellKind::Nushell
-        | ShellKind::Cmd
-        | ShellKind::Rc
-        | ShellKind::Xonsh
-        | ShellKind::Elvish => None,
-    }
 }
 
 fn format_task_for_activation(
@@ -833,37 +802,6 @@ mod tests {
         assert_eq!(
             format_task_for_activation(&task, ShellKind::PowerShell, "powershell.exe", true),
             "&cargo test 'some test'"
-        );
-    }
-
-    #[test]
-    fn remote_cli_path_activation_uses_shell_syntax() {
-        assert_eq!(
-            remote_cli_path_activation(ShellKind::Posix),
-            Some(r#"export PATH="$HOME"/.zed_server/bin:$PATH"#.to_string())
-        );
-        assert_eq!(
-            remote_cli_path_activation(ShellKind::Fish),
-            Some(r#"set -gx PATH "$HOME"/.zed_server/bin $PATH"#.to_string())
-        );
-        assert_eq!(
-            remote_cli_path_activation(ShellKind::Tcsh),
-            Some(r#"setenv PATH "$HOME"/.zed_server/bin:$PATH"#.to_string())
-        );
-        assert_eq!(remote_cli_path_activation(ShellKind::Nushell), None);
-    }
-
-    #[test]
-    fn prepends_remote_cli_path_activation_before_existing_activation() {
-        let mut activation_script = vec!["source .venv/bin/activate".to_string()];
-        prepend_remote_cli_path_activation(&mut activation_script, ShellKind::Posix);
-
-        assert_eq!(
-            activation_script,
-            vec![
-                r#"export PATH="$HOME"/.zed_server/bin:$PATH"#.to_string(),
-                "source .venv/bin/activate".to_string(),
-            ]
         );
     }
 }

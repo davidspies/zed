@@ -20,7 +20,7 @@ use project::agent_server_store::{
     AgentServerCommand, AgentServerStore, AllAgentServersSettings, CustomAgentServerSettings,
 };
 use project::{AgentId, Project};
-use remote::remote_client::Interactive;
+use remote::remote_client::{Interactive, RemoteCliOnPath};
 use serde::Deserialize;
 use settings::{AgentConfigOptionValue, SettingsStore};
 use std::path::PathBuf;
@@ -833,6 +833,7 @@ impl AcpConnection {
                             root_dir.as_ref().map(|path| path.display().to_string()),
                             None,
                             Interactive::No,
+                            RemoteCliOnPath::No,
                         )
                         .log_err()?;
                     Some((template.program, template.args, template.env))

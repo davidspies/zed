@@ -132,6 +132,13 @@ pub enum Interactive {
     No,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemoteCliOnPath {
+    /// Start the command with the remote server's `zed` shim directory prepended to PATH.
+    Yes,
+    No,
+}
+
 pub trait RemoteClientDelegate: Send + Sync {
     fn ask_password(
         &self,
@@ -963,11 +970,20 @@ impl RemoteClient {
         working_dir: Option<String>,
         port_forward: Option<(u16, String, u16)>,
         interactive: Interactive,
+        remote_cli: RemoteCliOnPath,
     ) -> Result<CommandTemplate> {
         let Some(connection) = self.remote_connection() else {
             return Err(anyhow!("no remote connection"));
         };
-        connection.build_command(program, args, env, working_dir, port_forward, interactive)
+        connection.build_command(
+            program,
+            args,
+            env,
+            working_dir,
+            port_forward,
+            interactive,
+            remote_cli,
+        )
     }
 
     pub fn build_forward_ports_command(
@@ -1622,6 +1638,7 @@ pub trait RemoteConnection: Send + Sync {
         working_dir: Option<String>,
         port_forward: Option<(u16, String, u16)>,
         interactive: Interactive,
+        remote_cli: RemoteCliOnPath,
     ) -> Result<CommandTemplate>;
     fn build_forward_ports_command(
         &self,

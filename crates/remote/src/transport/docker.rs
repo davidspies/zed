@@ -27,8 +27,8 @@ use rpc::proto::Envelope;
 use crate::{
     RemoteArch, RemoteClientDelegate, RemoteConnection, RemoteConnectionOptions, RemoteOs,
     RemotePlatform,
-    remote_client::{CommandTemplate, Interactive},
-    transport::parse_platform,
+    remote_client::{CommandTemplate, Interactive, RemoteCliOnPath},
+    transport::{parse_platform, with_remote_cli},
 };
 
 #[derive(
@@ -772,6 +772,7 @@ impl RemoteConnection for DockerExecConnection {
         working_dir: Option<String>,
         _port_forward: Option<(u16, String, u16)>,
         interactive: Interactive,
+        remote_cli: RemoteCliOnPath,
     ) -> Result<CommandTemplate> {
         let mut parsed_working_dir = None;
 
@@ -790,17 +791,13 @@ impl RemoteConnection for DockerExecConnection {
             }
         }
 
-        let mut inner_program = Vec::new();
-
-        if let Some(program) = program {
-            inner_program.push(program);
-            for arg in args {
-                inner_program.push(arg.clone());
-            }
-        } else {
-            inner_program.push(self.shell());
-            inner_program.push("-l".to_string());
+        let (program, args) = match program {
+            Some(program) => (program, args.to_vec()),
+            None => (self.shell(), vec!["-l".to_string()]),
         };
+        let (program, args) = with_remote_cli(remote_cli, program, args);
+        let mut inner_program = vec![program];
+        inner_program.extend(args);
 
         let mut docker_args = vec![
             "exec".to_string(),
